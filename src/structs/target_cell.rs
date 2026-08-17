@@ -18,10 +18,24 @@ impl TargetCellNode {
         self.cell_data.as_mut_ptr()
     }
 
-    pub fn ensure_capacity(&mut self, min_capacity: usize) {
-        if self.cell_data.len() < min_capacity {
-            self.cell_data.resize(min_capacity, 0)
-        }
+    /// Makes this node hold exactly `capacity` zeroed words, whatever it held
+    /// before.
+    ///
+    /// A node handed back by the pool has to be indistinguishable from one
+    /// built by [`TargetCellNode::new`], and that means the same length as well
+    /// as the same contents. Growing alone is not enough: a manager reused
+    /// across a graph with fewer words per vertex -- which is any graph of 64
+    /// vertices or fewer following one with more -- kept the wider bitset, and
+    /// the bits set in it named vertices the new graph does not have. The
+    /// search then read those as target-cell members and indexed the orbit
+    /// array of the smaller graph with them.
+    ///
+    /// `resize` alone would zero only the words it adds, which is the trap this
+    /// is here to close, so the zeroing is stated separately rather than left
+    /// as a side effect of growing.
+    pub fn reset_to(&mut self, capacity: usize) {
+        self.cell_data.resize(capacity, 0);
+        self.cell_data.fill(0);
     }
 }
 
@@ -51,8 +65,10 @@ impl TargetCellNodePool {
     }
 
     /// Bump-allocate the next node.  Reuses an existing Vec entry when possible;
-    /// only calls push() when the pool needs to grow.  next_index is always cleared
-    /// so callers see a fresh node.
+    /// only calls push() when the pool needs to grow.  A reused node is reset to
+    /// `capacity` zeroed words and an empty link, so callers cannot tell it from
+    /// a fresh one -- see [`TargetCellNode::reset_to`] for what went wrong when
+    /// it only grew.
     #[inline]
     pub fn allocate_node(&mut self, capacity: usize) -> usize {
         let pool_index = self.next_alloc;
@@ -60,7 +76,7 @@ impl TargetCellNodePool {
         if pool_index < self.nodes.len() {
             let node = &mut self.nodes[pool_index];
             node.next_index = None;
-            node.ensure_capacity(capacity);
+            node.reset_to(capacity);
         } else {
             self.nodes.push(TargetCellNode::new(capacity));
         }
