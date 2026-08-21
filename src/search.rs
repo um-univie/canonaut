@@ -127,7 +127,7 @@ pub fn canonicalize(
     let mut vertex_index: u32;
     let mut number_of_cells: u32;
 
-    if options.algorithm_context.get_canonical && canonical_graph.is_none() {
+    if options.get_canonical && canonical_graph.is_none() {
         stats.error_status_code = 3;
         eprintln!("Canonical graph requested but no graph provided\n",);
         return;
@@ -262,8 +262,8 @@ pub fn canonicalize(
             }
         }
         if let Some(active) = active {
-            let vertex_count = options.algorithm_context.number_of_vertices as usize;
-            options.algorithm_context.active[..vertex_count].copy_from_slice(&active[..vertex_count]);
+            let word_count = words_per_vertex as usize;
+            options.algorithm_context.active[..word_count].copy_from_slice(&active[..word_count]);
         } else {
             options
                 .algorithm_context
@@ -1192,7 +1192,9 @@ fn processnode(
                     .schreiersims
                     .add_generator(context.work_permutation.as_slice());
             }
-            return context.gca_canonical_level;
+            // This automorphism reaches the first leaf. Backtracking relative
+            // to the canonical leaf can skip branches and lose generators.
+            return context.gca_first_level as i32;
         }
         2 => {
             if context.free_memory_pointer == context.workspace_top {
@@ -1244,7 +1246,7 @@ fn processnode(
                     .add_generator(context.work_permutation.as_slice());
             }
             if orbits[context.coset_vertex as usize] < context.coset_vertex {
-                return context.gca_canonical_level;
+                return context.gca_first_level as i32;
             }
             if context.gca_canonical_level != context.gca_first_level as i32 {
                 context.needs_short_prune = true;
@@ -1331,7 +1333,7 @@ fn processnode(
     } else {
         candidate_level
     };
-    if short_prune_applicable && new_backtrack_level != context.gca_canonical_level {
+    if short_prune_applicable && new_backtrack_level != context.gca_first_level as i32 {
         context.needs_short_prune = true;
     }
     new_backtrack_level
@@ -1523,5 +1525,32 @@ fn write_permutation(
         } else {
             let _ = output.write(b"\n");
         }
+    }
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+    use crate::refine::GraphContext;
+
+    #[test]
+    fn explicit_active_cells_use_words_not_vertices() {
+        let mut options = CanonautOptions { default_partition: false, ..Default::default() };
+        let mut stats = Statistics::new();
+        let mut orbits = [0; 4];
+        canonicalize(&[0; 4], &mut [0, 1, 2, 3], &mut [1, 1, 1, 0],
+            Some(&[1usize << 63]), &mut orbits, &mut options, &mut stats,
+            &mut [], 1, 4, None, &mut GraphContext::new(4));
+        assert_eq!(stats.group_size1, 24.0);
+        assert_eq!(orbits, [0; 4]);
+    }
+
+    #[test]
+    fn missing_canonical_output_is_reported_on_the_first_call() {
+        let mut options = CanonautOptions { get_canonical: true, ..Default::default() };
+        let mut stats = Statistics::new();
+        canonicalize(&[0], &mut [0], &mut [0], None, &mut [0],
+            &mut options, &mut stats, &mut [], 1, 1, None, &mut GraphContext::new(1));
+        assert_eq!(stats.error_status_code, 3);
     }
 }

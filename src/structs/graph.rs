@@ -127,6 +127,13 @@ impl DenseGraph {
         self.directed
     }
 
+    pub(crate) fn has_loops(&self) -> bool {
+        (0..self.number_of_vertices()).any(|v| {
+            self.adjacency[v * self.words_per_vertex as usize + v / 64]
+                & (1usize << (63 - v % 64)) != 0
+        })
+    }
+
     /// Number of vertices.
     pub fn number_of_vertices(&self) -> usize {
         self.number_of_vertices as usize
@@ -161,6 +168,8 @@ impl DenseGraph {
             !self.directed,
             "add_edge() called on a directed DenseGraph; use add_arc() instead"
         );
+        assert!(vertex1 < self.number_of_vertices() && vertex2 < self.number_of_vertices(),
+            "vertex out of range");
         add_one_edge(&mut self.adjacency, vertex1, vertex2, self.words_per_vertex);
     }
 
@@ -175,12 +184,14 @@ impl DenseGraph {
             self.directed,
             "add_arc() called on an undirected DenseGraph; use add_edge(), or construct with DenseGraph::new_directed()"
         );
+        assert!(source_vertex < self.number_of_vertices() && target_vertex < self.number_of_vertices(),
+            "vertex out of range");
         add_one_arc(&mut self.adjacency, source_vertex, target_vertex, self.words_per_vertex);
     }
 
     /// Attaches a vertex coloring: `colors[v]` is an arbitrary `u32` color for
-    /// vertex `v`.  Colors need not be contiguous or sorted — only which vertices
-    /// share a color matters.  Call at construction or any time before
+    /// vertex `v`. Colors need not be contiguous or sorted; values are fixed
+    /// labels across graphs. Call at construction or any time before
     /// [`canonize_graph`](crate::structs::CanonautManager::canonize_graph);
     /// replaces any coloring set previously.
     ///

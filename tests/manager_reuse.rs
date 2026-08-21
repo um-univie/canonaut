@@ -5,6 +5,70 @@
 
 use canonaut::structs::CanonautManager;
 
+#[test]
+fn shrinking_active_cells_preserves_the_automorphism_group() {
+    // The asymmetric graph can leave active bits above vertex 127. A reused
+    // manager used to scan those stale words, reaching an unchecked read past
+    // the smaller partition. In release builds it silently lost generators.
+    let large = canonaut::generators::generate_random_graph(193, 0.1, 42);
+    let n = 127;
+    let small = vec![0; n * 2];
+    let colors: Vec<u32> = (0..n).map(|v| if v < 3 { 0 } else { v as u32 }).collect();
+    let mut manager = CanonautManager::new(193).with_canonization();
+    for _ in 0..3 {
+        manager.canonize(&large);
+        manager.canonize_with_colors(&small, &colors);
+        // Only the first three isolated vertices can be permuted: S_3.
+        assert_eq!(manager.statistics().group_size1, 6.0);
+        assert_eq!(manager.statistics().number_of_orbits, 125);
+        assert_eq!(&manager.orbits()[..3], &[0, 0, 0]);
+        assert_eq!(manager.canonical_graph, small);
+    }
+}
+
+#[test]
+fn empty_graph_resets_results_between_nonempty_runs() {
+    use canonaut::structs::DenseGraph;
+    let mut manager = CanonautManager::new(65).with_canonization();
+    manager.canonize(&canonaut::generators::generate_cycle_graph(65));
+    for colored in [false, true] {
+        let mut empty = DenseGraph::new(0);
+        if colored { empty.set_colors(vec![]); }
+        manager.canonize_graph(&empty);
+        assert!(manager.canonical_graph.is_empty());
+        assert!(manager.labeling().is_empty());
+        assert!(manager.orbits().is_empty());
+        assert_eq!(manager.statistics().group_size1, 1.0);
+        assert_eq!(manager.statistics().group_size2, 0);
+        assert_eq!(manager.statistics().number_of_orbits, 0);
+        assert_eq!(manager.statistics().number_of_generators, 0);
+        manager.canonize_with_colors(&[0; 3], &[0; 3]);
+        assert_eq!(manager.statistics().group_size1, 6.0);
+    }
+}
+
+#[test]
+fn raw_and_dense_entry_points_agree_across_word_boundaries() {
+    use canonaut::structs::DenseGraph;
+    let mut raw = CanonautManager::new(0).with_canonization();
+    let mut dense = CanonautManager::new(0).with_canonization();
+    for n in [1, 2, 63, 64, 65, 127, 128, 129, 257, 64, 0] {
+        let mut graph = DenseGraph::new(n);
+        for v in 1..n { graph.add_edge(v - 1, v); }
+        raw.canonize(&graph.adjacency);
+        dense.canonize_graph(&graph);
+        assert_eq!(raw.canonical_graph, dense.canonical_graph, "n={n}");
+        assert_eq!(raw.orbits(), dense.orbits(), "n={n}");
+        assert_eq!(raw.statistics().group_size1, dense.statistics().group_size1);
+    }
+}
+
+#[test]
+#[should_panic(expected = "valid (n, m)")]
+fn raw_adjacency_rejects_invalid_dimensions() {
+    CanonautManager::new(0).canonize(&[0; 65]);
+}
+
 /// A deterministic pseudo-random graph, as a dense bitset of `n * m` words.
 fn random_graph(n: usize, seed: &mut u64) -> Vec<usize> {
     let mut next = || {
@@ -140,4 +204,25 @@ fn reuse_gives_the_same_labelling_as_a_fresh_manager() {
         reused.canonize_with_colors(&graph, &colors);
         assert_eq!(&reused.labeling()[..n], &expected[..], "n={n}");
     }
+}
+
+#[test]
+fn dense_undirected_loops_use_full_automorphism_checks() {
+    use canonaut::structs::DenseGraph;
+    let mut graph = DenseGraph::new(3);
+    graph.add_edge(0, 0);
+    let mut manager = CanonautManager::new(3).with_canonization();
+    manager.canonize_graph(&graph);
+    assert_eq!(manager.statistics().group_size1, 2.0);
+    assert_eq!(manager.orbits(), &[0, 1, 1]);
+    assert!(!graph.is_directed());
+    // Switching back to a loopless graph must reset the effective mode.
+    manager.canonize_graph(&DenseGraph::new(3));
+    assert_eq!(manager.statistics().group_size1, 6.0);
+}
+
+#[test]
+#[should_panic(expected = "vertex out of range")]
+fn dense_graph_rejects_arcs_into_padding_bits() {
+    canonaut::structs::DenseGraph::new_directed(3).add_arc(0, 3);
 }

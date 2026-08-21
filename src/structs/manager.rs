@@ -19,7 +19,7 @@ use crate::utilities::words_needed;
 
 /// All mutable state threaded through a single canonicalization search.
 ///
-/// Replaces the C global variables with a single owned struct. Buffers grow
+/// Replaces the C global variables with a single owned struct. Buffer capacities grow
 /// monotonically via [`AlgorithmContext::ensure_capacity`] and are reused across
 /// repeated calls to avoid allocation pressure on the hot path.
 #[derive(Default)]
@@ -73,7 +73,8 @@ pub struct AlgorithmContext {
         ) -> (),
     >,
     /// Called to override canonical-labeling comparison.
-    pub user_canonical_procedure: Option<fn(&[usize], &mut [u32], &mut [usize], usize, u32, u32, u32) -> u32>,
+    pub user_canonical_procedure:
+        Option<fn(&[usize], &mut [u32], &mut [usize], usize, u32, u32, u32) -> u32>,
     /// Vertex-invariant procedure for pruning the search tree.
     pub invariant_procedure: Option<
         fn(&[usize], &mut [u32], &mut [u32], i32, u32, u32, &mut [u32], u32, bool, u32, u32) -> (),
@@ -192,8 +193,8 @@ impl AlgorithmContext {
     }
 
     /// Ensure all internal algorithm buffers have sufficient capacity for the given
-    /// graph dimensions. Buffers only grow, never shrink, so they can be reused
-    /// across multiple calls without reallocating.
+    /// graph dimensions. Allocated capacities are retained across calls; the
+    /// active bitset also tracks its current logical length.
     pub fn ensure_capacity(&mut self, words_per_vertex: u32, number_of_vertices: u32) {
         let word_count = words_per_vertex as usize;
         let vertex_count = number_of_vertices as usize;
@@ -206,9 +207,9 @@ impl AlgorithmContext {
         if self.fixed_points.len() < word_count {
             self.fixed_points.resize(word_count, 0);
         }
-        if self.active.len() < word_count {
-            self.active.resize(word_count, 0);
-        }
+        // Refinement scans the whole active slice. Retain capacity, but never
+        // expose stale words from a larger graph as active cells of this one.
+        self.active.resize(word_count, 0);
         if self.first_labeling.len() < vertex_count {
             self.first_labeling.resize(vertex_count, 0);
         }
@@ -423,7 +424,8 @@ pub struct CanonautOptions {
     >,
     pub user_node_procedure:
         Option<fn(&[usize], &mut [u32], &mut [u32], u32, u32, i32, u32, u32, u32) -> ()>,
-    pub user_canonical_procedure: Option<fn(&[usize], &mut [u32], &mut [usize], usize, u32, u32, u32) -> u32>,
+    pub user_canonical_procedure:
+        Option<fn(&[usize], &mut [u32], &mut [usize], usize, u32, u32, u32) -> u32>,
     pub invariant_procedure: Option<
         fn(&[usize], &mut [u32], &mut [u32], i32, u32, u32, &mut [u32], u32, bool, u32, u32) -> (),
     >,
@@ -473,7 +475,7 @@ impl Default for CanonautOptions {
 ///
 /// Pre-allocates output buffers at construction and reuses them across repeated
 /// [`canonize`](CanonautManager::canonize) calls, so no allocation occurs on the
-/// hot path as long as the graph order does not increase.
+/// hot path once buffer capacity and search depth have been warmed up.
 ///
 /// # Example
 ///
@@ -495,7 +497,9 @@ pub struct CanonautManager {
     /// The canonical form of the last graph passed to [`canonize`](CanonautManager::canonize).
     ///
     /// Valid only when [`with_canonization`](CanonautManager::with_canonization) was called
-    /// before the first run.  Length is `n * m` words after the call.
+    /// before the first run. Length is `n * m` words after the call. For colored
+    /// isomorphism keys, also compare `colors[labeling[i]]` in canonical order;
+    /// this adjacency matrix alone does not encode vertex colors.
     pub canonical_graph: Vec<usize>,
     labeling: Vec<u32>,
     partition: Vec<u32>,
@@ -509,8 +513,8 @@ pub struct CanonautManager {
 impl CanonautManager {
     /// Creates a manager pre-sized for graphs on `number_of_vertices` vertices.
     ///
-    /// All internal buffers are allocated here so the first call to
-    /// [`canonize`](Self::canonize) pays no allocation cost.
+    /// Output and refinement buffers are allocated here. Search-tree nodes are
+    /// allocated lazily and reused on subsequent calls.
     pub fn new(number_of_vertices: usize) -> Self {
         let mut options = CanonautOptions::default();
         // Pre-size all algorithm buffers for the expected graph dimensions so the
@@ -525,7 +529,7 @@ impl CanonautManager {
         graph_context.ensure_bucket_size(number_of_vertices as u32);
 
         CanonautManager {
-            canonical_graph: vec![0; number_of_vertices],
+            canonical_graph: vec![0; number_of_vertices * word_count],
             labeling: vec![0; number_of_vertices],
             partition: vec![0; number_of_vertices],
             orbits: vec![0; number_of_vertices],
@@ -556,7 +560,8 @@ impl CanonautManager {
     /// Registers a callback invoked for every automorphism generator found.
     ///
     /// The callback signature mirrors nauty's `userautomproc`:
-    /// `(n, perm, orbits, num_orbits, stabvert, n)`.
+    /// `(generator_number, perm, orbits, num_orbits, stabvert, n)`.
+    /// The callback observes search state; it must not modify `perm` or `orbits`.
     pub fn with_automorphism_callback(
         mut self,
         callback: fn(u32, &mut [u32], &mut [u32], u32, u32, u32),
@@ -570,10 +575,10 @@ impl CanonautManager {
 
     /// Grows output buffers to fit a graph of `number_of_vertices` × `words_per_vertex`.
     ///
-    /// Called automatically by [`canonize`](Self::canonize); exposed for callers
-    /// that need to pre-size buffers before passing slices to the algorithm directly.
+    /// Called automatically by [`canonize`](Self::canonize); callers may also
+    /// use this to pre-size buffers before a run.
     pub fn prepare_for_run(&mut self, number_of_vertices: usize, words_per_vertex: usize) {
-        // Only grow; never shrink. Contents are fully overwritten by canonicalize() before use.
+        // Logical lengths follow the current graph; allocated capacities are retained.
         let graph_words = number_of_vertices * words_per_vertex;
         Self::ensure_len(&mut self.canonical_graph, graph_words);
         Self::ensure_len(&mut self.labeling, number_of_vertices);
@@ -584,14 +589,9 @@ impl CanonautManager {
     #[inline]
     fn ensure_len<T: Default>(vec: &mut Vec<T>, target_len: usize) {
         if vec.len() < target_len {
-            // Grow: resize_with initializes new elements.
             vec.resize_with(target_len, T::default);
         }
-        // If len > target_len, truncate without dropping (plain data types).
-        // SAFETY: target_len <= vec.len(), so all elements [0..target_len] are initialized.
-        if vec.len() > target_len {
-            unsafe { vec.set_len(target_len) };
-        }
+        vec.truncate(target_len);
     }
 
     /// Clears and resizes `to_fill` to exactly `size` default-initialized elements.
@@ -634,7 +634,10 @@ impl CanonautManager {
     ///
     /// `graph` must be a flat bit-matrix with row stride `m = words_needed(n)` words,
     /// using MSB-0 bit ordering (bit `j` of row `i` set ↔ edge `i→j`).  The length
-    /// `graph.len()` must equal `n * m` for some valid `(n, m)` pair.
+    /// `graph.len()` must equal `n * m` for some valid `(n, m)` pair, including
+    /// an empty slice for the zero-vertex graph. Padding bits must be zero.
+    /// Undirected input must be symmetric and loopless; use [`with_digraph`](Self::with_digraph)
+    /// for directed graphs or graphs containing loops.
     ///
     /// After the call:
     /// - [`canonical_graph`](Self::canonical_graph) contains the canonical adjacency
@@ -646,13 +649,59 @@ impl CanonautManager {
     ///
     /// Panics if `graph.len()` does not correspond to any valid `(n, m)` pair.
     pub fn canonize(&mut self, graph: &[usize]) {
-        // Recover (n, m) from graph.len() = n*m where m = words_needed(n).
-        // The naive formula words_needed(len/64+1) breaks for n>64 because m>1.
-        let words_per_vertex = (1..=graph.len())
-            .find(|&candidate_words_per_vertex| graph.len() % candidate_words_per_vertex == 0 && words_needed(graph.len() / candidate_words_per_vertex) == candidate_words_per_vertex)
-            .expect("graph slice length does not correspond to a valid (n, m) pair");
-        let number_of_vertices = graph.len() / words_per_vertex;
+        let (number_of_vertices, words_per_vertex) = Self::dimensions(graph.len());
+        self.run(graph, number_of_vertices, words_per_vertex, None);
+    }
+
+    // n*m is strictly increasing in n, with m = ceil(n / WORDSIZE).
+    // For nonempty input, m = floor(sqrt((len - 1) / WORDSIZE)) + 1.
+    fn dimensions(graph_words: usize) -> (usize, usize) {
+        if graph_words == 0 {
+            return (0, 0);
+        }
+        let words = ((graph_words - 1) / usize::BITS as usize).isqrt() + 1;
+        let vertices = graph_words / words;
+        assert!(
+            graph_words % words == 0 && words_needed(vertices) == words,
+            "graph slice length does not correspond to a valid (n, m) pair"
+        );
+        (vertices, words)
+    }
+
+    fn run(
+        &mut self,
+        graph: &[usize],
+        number_of_vertices: usize,
+        words_per_vertex: usize,
+        colors: Option<&[u32]>,
+    ) {
+        assert_eq!(
+            graph.len(),
+            number_of_vertices * words_per_vertex,
+            "graph slice length does not match the vertex count"
+        );
         self.prepare_for_run(number_of_vertices, words_per_vertex);
+        self.options.default_partition = colors.is_none();
+        if let Some(colors) = colors {
+            assert_eq!(
+                colors.len(),
+                number_of_vertices,
+                "colors.len() must equal the vertex count"
+            );
+            for (vertex, label) in self.labeling.iter_mut().enumerate() {
+                *label = vertex as u32;
+            }
+            // The vertex tie-breaker makes unstable sorting deterministic, and
+            // using the labeling buffer avoids allocating on every colored call.
+            self.labeling
+                .sort_unstable_by_key(|&vertex| (colors[vertex as usize], vertex));
+            for position in 0..number_of_vertices {
+                let last_in_cell = position + 1 == number_of_vertices
+                    || colors[self.labeling[position] as usize]
+                        != colors[self.labeling[position + 1] as usize];
+                self.partition[position] = if last_in_cell { 0 } else { ALGORITHM_INFINITY };
+            }
+        }
 
         let canonical_graph = if self.options.get_canonical {
             Some(self.canonical_graph.as_mut_slice())
@@ -687,11 +736,13 @@ impl CanonautManager {
     /// to calling [`canonize_with_colors`](Self::canonize_with_colors)); otherwise
     /// this is a plain uncolored [`canonize`](Self::canonize).
     pub fn canonize_graph(&mut self, graph: &DenseGraph) {
-        self.options.digraph = graph.is_directed();
-        match graph.colors() {
-            Some(colors) => self.canonize_with_colors(&graph.adjacency, colors),
-            None => self.canonize(&graph.adjacency),
-        }
+        self.options.digraph = graph.is_directed() || graph.has_loops();
+        self.run(
+            &graph.adjacency,
+            graph.number_of_vertices(),
+            words_needed(graph.number_of_vertices()),
+            graph.colors(),
+        );
     }
 
     /// Like [`canonize_graph`](Self::canonize_graph), but with `colors` passed
@@ -700,8 +751,13 @@ impl CanonautManager {
     /// the same graph under several different colorings; see
     /// [`canonize_with_colors`](Self::canonize_with_colors).
     pub fn canonize_graph_with_colors(&mut self, graph: &DenseGraph, colors: &[u32]) {
-        self.options.digraph = graph.is_directed();
-        self.canonize_with_colors(&graph.adjacency, colors);
+        self.options.digraph = graph.is_directed() || graph.has_loops();
+        self.run(
+            &graph.adjacency,
+            graph.number_of_vertices(),
+            words_needed(graph.number_of_vertices()),
+            Some(colors),
+        );
     }
 
     /// Like [`canonize`](Self::canonize), but with a vertex coloring (partition).
@@ -719,36 +775,13 @@ impl CanonautManager {
     /// Panics if `graph.len()` does not correspond to a valid `(n, m)` pair, or if
     /// `colors.len()` does not equal `n`.
     pub fn canonize_with_colors(&mut self, graph: &[usize], colors: &[u32]) {
-        let words_per_vertex = (1..=graph.len())
-            .find(|&candidate_words_per_vertex| graph.len() % candidate_words_per_vertex == 0 && words_needed(graph.len() / candidate_words_per_vertex) == candidate_words_per_vertex)
-            .expect("graph slice length does not correspond to a valid (n, m) pair");
-        let number_of_vertices = graph.len() / words_per_vertex;
+        let number_of_vertices = colors.len();
+        let words_per_vertex = words_needed(number_of_vertices);
         assert_eq!(
-            colors.len(),
-            number_of_vertices,
-            "colors.len() ({}) must equal the vertex count ({})",
-            colors.len(),
-            number_of_vertices,
+            graph.len(),
+            number_of_vertices * words_per_vertex,
+            "colors.len() must equal the vertex count implied by graph.len()"
         );
-
-        self.prepare_for_run(number_of_vertices, words_per_vertex);
-
-        // Sort vertex indices by (color, index) so equal colors land in contiguous
-        // runs; index as tiebreaker keeps the mapping deterministic across calls.
-        let mut order: Vec<u32> = (0..number_of_vertices as u32).collect();
-        order.sort_by_key(|&vertex| (colors[vertex as usize], vertex));
-        for (position, &vertex) in order.iter().enumerate() {
-            self.labeling[position] = vertex;
-            // partition[i] <= level(0) marks the end of a cell; ALGORITHM_INFINITY
-            // (> 0) means "still inside the current cell". See the low-level
-            // `canonicalize()` partition convention in search.rs.
-            let last_in_cell = position + 1 == order.len()
-                || colors[vertex as usize] != colors[order[position + 1] as usize];
-            self.partition[position] = if last_in_cell { 0 } else { ALGORITHM_INFINITY };
-        }
-
-        self.options.default_partition = false;
-        self.canonize(graph);
-        self.options.default_partition = true;
+        self.run(graph, number_of_vertices, words_per_vertex, Some(colors));
     }
 }
