@@ -12,7 +12,7 @@ use crate::refine::GraphContext;
 use crate::search::canonicalize;
 use crate::structs::{
     graph::DenseGraph,
-    schreier_arena::{SchreierArenaContext, SchreierSims},
+    schreier_arena::SchreierSims,
     target_cell::TargetCellNodePool,
 };
 use crate::utilities::words_needed;
@@ -436,7 +436,6 @@ pub struct CanonautOptions {
     pub dispatch: DispatchVec,
     pub schreier: bool,
     pub extra_options: *mut std::ffi::c_void,
-    pub schreier_context: SchreierArenaContext,
     pub algorithm_context: AlgorithmContext,
 }
 
@@ -465,7 +464,6 @@ impl Default for CanonautOptions {
             schreier: false,
             extra_options: std::ptr::null() as *const std::os::raw::c_void
                 as *mut std::os::raw::c_void,
-            schreier_context: SchreierArenaContext::default(),
             algorithm_context: AlgorithmContext::default(),
         }
     }
@@ -549,9 +547,15 @@ impl CanonautManager {
         self
     }
 
-    /// Treats input graphs as digraphs: the adjacency bit-matrix is read as
-    /// directed (row `v`, bit `w` means the arc `v → w`) and is not assumed
-    /// to be symmetric.
+    /// Enable optional randomized stabilizer pruning for highly symmetric graphs.
+    /// Missing random generators only reduces pruning; results remain exact.
+    pub fn with_schreier(mut self) -> Self {
+        self.options.schreier = true;
+        self
+    }
+
+    /// Treats input graphs as digraphs: row `v`, bit `w` means the arc `v → w`.
+    /// The adjacency matrix is not assumed to be symmetric.
     pub fn with_digraph(mut self) -> Self {
         self.options.digraph = true;
         self

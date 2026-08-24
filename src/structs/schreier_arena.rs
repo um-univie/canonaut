@@ -68,6 +68,7 @@ pub struct PermId(u32);
 
 impl PermId {
     const NONE: Self = PermId(u32::MAX);
+    const IDENTITY: Self = PermId(u32::MAX - 1);
     fn is_valid(self) -> bool {
         self != Self::NONE
     }
@@ -158,10 +159,10 @@ pub struct Level {
     pub fixed_point: u32,
     /// Orbit partition: `orbits[v]` is the canonical representative of `v`'s orbit.
     pub orbits: Vec<u32>,
-    /// Transversal: `transversal[v]` is the permutation mapping `fixed_point` to `v`,
+    /// Transversal: a power of `transversal[v]` maps `v` toward the base point,
     /// or `PermId::NONE` if `v` is not yet in the orbit.
     pub transversal: Vec<PermId>,
-    /// `powers[v]` is the exponent `k` such that `transversal[v]^k` maps `fixed_point` to `v`.
+    /// Exponent mapping `v` to an earlier vertex in the rooted Schreier tree.
     pub powers: Vec<u32>,
 }
 impl Level {
@@ -192,6 +193,8 @@ pub struct SchreierSims {
     pub context: SchreierArenaContext,
     /// IDs of the generating permutations in `arena`.
     pub generators: Vec<PermId>,
+    essential: Vec<bool>,
+    retained: Vec<bool>,
     /// The identity permutation `[0, 1, …, n-1]` for fast identity tests.
     pub identity_slice: Vec<u32>,
     /// RNG driving the random word walk in [`expand_schreier`](Self::expand_schreier)
@@ -205,9 +208,11 @@ impl SchreierSims {
         SchreierSims {
             number_of_vertices: vertex_count,
             arena: PermArena::new(vertex_count),
-            chain: Vec::new(),
+            chain: vec![Level::new(vertex_count, u32::MAX)],
             context: SchreierArenaContext::new(vertex_count),
             generators: Vec::new(),
+            essential: Vec::new(),
+            retained: Vec::new(),
             identity_slice: (0..vertex_count as u32).collect::<Vec<u32>>(),
             random_generator: RngState::new(),
         }
@@ -296,6 +301,40 @@ impl SchreierSims {
         }
     }
 
+    /// Start a new graph, retaining permutation and scratch capacity.
+    pub fn reset(&mut self, n: usize) {
+        self.number_of_vertices = n;
+        self.arena.data.clear();
+        self.arena.free_storage.clear();
+        self.arena.permutation_length = n;
+        self.generators.clear();
+        self.essential.clear();
+        self.retained.clear();
+        self.identity_slice.clear();
+        self.identity_slice.extend(0..n as u32);
+        self.context.working_permutation.resize(n, 0);
+        self.context.working_permutation2.resize(n, 0);
+        self.context.working_permutation_a.resize(n, 0);
+        self.context.working_permutation_b.resize(n, 0);
+        self.context.working_set.resize(n.div_ceil(64), 0);
+        self.context.working_set2.resize(n.div_ceil(64), 0);
+        self.context.maximum_schreier_failures = DEFAULT_SCHREIERFAILS;
+        self.context.filter_count = 0;
+        self.context.mult_count = 0;
+        self.random_generator = RngState::new();
+        for level in &mut self.chain {
+            level.fixed_point = u32::MAX;
+            level.orbits.clear();
+            level.orbits.extend(0..n as u32);
+            level.transversal.resize(n, PermId::NONE);
+            level.transversal.fill(PermId::NONE);
+            level.powers.resize(n, 0);
+        }
+        if self.chain.is_empty() {
+            self.chain.push(Level::new(n, u32::MAX));
+        }
+    }
+
     /// Adds `partition` as a generator, filtering it through the full stabilizer chain.
     pub fn add_generator(&mut self, partition: &[u32]) -> bool {
         self.filter(partition, false, -1)
@@ -318,7 +357,7 @@ impl SchreierSims {
         let limit: usize = if maximum_level < 0 {
             self.chain.len()
         } else {
-            maximum_level as usize
+            (maximum_level as usize + 1).min(self.chain.len())
         };
 
         // Iterate through stabilizer chain levels
@@ -336,6 +375,9 @@ impl SchreierSims {
             }
             self.context.working_permutation = temp_working_permutation;
 
+            if self.chain[level_index].fixed_point == u32::MAX {
+                break;
+            }
             let mut current_perm_id = None;
 
             // 2. Transversal "Hole Filling" Logic
@@ -350,9 +392,9 @@ impl SchreierSims {
                     // If we haven't officially added this working_permutation to our storage, do it now
                     if current_perm_id.is_none() {
                         let new_perm_id = self.arena.alloc(&self.context.working_permutation);
-                        if !ingroup {
-                            self.generators.push(new_perm_id);
-                        }
+                        self.essential.resize(self.arena.data.len() / vertex_count, false);
+                        self.essential[new_perm_id.0 as usize] = !ingroup;
+                        self.generators.push(new_perm_id);
                         current_perm_id = Some(new_perm_id);
                         ingroup = true; // Once added, it's effectively in the group
                     }
@@ -383,9 +425,7 @@ impl SchreierSims {
             while current_image != fixed_point_index {
                 // SAFETY: current_image < vertex_count, transversal/powers have len = vertex_count
                 let transversal_id = unsafe { *self.chain[level_index].transversal.get_unchecked(current_image) };
-                if transversal_id == PermId::NONE {
-                    break;
-                }
+                debug_assert!(transversal_id != PermId::NONE && transversal_id != PermId::IDENTITY);
                 let transversal_power = unsafe { *self.chain[level_index].powers.get_unchecked(current_image) };
 
                 // Read out of arena before splitting context's fields below, or the
@@ -409,16 +449,13 @@ impl SchreierSims {
             // 3. Stripping happens above by repeatedly composing with the transversal element.
         }
 
-        // If we fell through the bottom and it's not identity, we extend the base
         if !self.is_identity(&self.context.working_permutation) && !ingroup {
-            let new_perm_id = self.arena.alloc(&self.context.working_permutation);
-            self.generators.push(new_perm_id);
-
-            let temp_working_permutation = std::mem::take(&mut self.context.working_permutation);
-            // Logic to add new base point (newschreier in C)
-            self.extend_base(&temp_working_permutation);
-            self.context.working_permutation = temp_working_permutation;
-
+            // Store the original generator, as in nauty: the stripped residue
+            // need not generate the same group without its transversal factors.
+            let id = self.arena.alloc(permutation);
+            self.essential.resize(self.arena.data.len() / vertex_count, false);
+            self.essential[id.0 as usize] = true;
+            self.generators.push(id);
             changed = true;
         }
 
@@ -487,29 +524,6 @@ impl SchreierSims {
 
         changed
     }
-    /// Adds a new level to the stabilizer chain.
-    /// Typically called when a permutation passes through all existing filters
-    /// but is still not the identity.
-    pub fn extend_base(&mut self, permutation: &[u32]) {
-        // Find the first point moved by permutation.
-        // This is a standard heuristic for choosing the next base point.
-        let mut new_base_point = None;
-        for (vertex_index, &value) in permutation.iter().enumerate() {
-            if value as usize != vertex_index {
-                new_base_point = Some(vertex_index as u32);
-                break;
-            }
-        }
-
-        if let Some(base_point) = new_base_point {
-            // Create new level
-            let level = Level::new(self.number_of_vertices, base_point);
-
-            // transversal[base_point] stays PermId::NONE: base_point maps to itself, no
-            // permutation needed to reach it.
-            self.chain.push(level);
-        }
-    }
     /// Merges orbits at `level_index` based on the permutation `permutation`.
     /// Returns true if any orbits were merged (changes made).
     /// Port of the Union-Find logic inside `filterschreier`.
@@ -562,21 +576,149 @@ impl SchreierSims {
             .copied()
     }
 
-    pub fn prune_set(&mut self, _fixed_points: &[usize], cell: &mut [usize]) -> Result<(), String> {
-        let current_level_index = 0;
-
-        // 1. Align with fixed_points
-        // 2. If needed, self.extend_base() and self.re_filter_all()
-        // 3. Get orbits from the final active level
-        let orbits = &self.chain[current_level_index].orbits;
-
-        let mut next_bit = cell.next_set_bit(0);
-        while let Some(cell_member) = next_bit {
-            if orbits[cell_member] != cell_member as u32 {
-                cell.unset_bit(cell_member);
-            }
-            next_bit = cell.next_set_bit(cell_member + 1);
+    /// Prune using only automorphisms fixing every point in `fixed_points`.
+    /// Random expansion can miss stabilizer elements, which only reduces pruning.
+    pub fn prune_set(&mut self, fixed_points: &[usize], cell: &mut [usize]) {
+        let n = self.number_of_vertices;
+        self.context.working_set.copy_from_slice(&fixed_points[..n.div_ceil(64)]);
+        let mut depth = 0;
+        while self.chain[depth].fixed_point != u32::MAX {
+            let point = self.chain[depth].fixed_point as usize;
+            if !self.context.working_set.is_bit_set(point) { break; }
+            self.context.working_set.unset_bit(point);
+            depth += 1;
         }
-        Ok(())
+        if let Some(mut point) = self.context.working_set.next_set_bit(0) {
+            // Preserve the compatible prefix and this level's orbits. Its
+            // transversal and every deeper stabilizer depend on the new base.
+            for level in &mut self.chain[depth..] {
+                for id in &mut level.transversal { *id = PermId::NONE; }
+            }
+            loop {
+                self.chain[depth].fixed_point = point as u32;
+                self.chain[depth].transversal[point] = PermId::IDENTITY;
+                depth += 1;
+                if depth == self.chain.len() {
+                    self.chain.push(Level::new(n, u32::MAX));
+                }
+                let level = &mut self.chain[depth];
+                level.fixed_point = u32::MAX;
+                for (v, orbit) in level.orbits.iter_mut().enumerate() { *orbit = v as u32; }
+                match self.context.working_set.next_set_bit(point + 1) {
+                    Some(next) => point = next,
+                    None => break,
+                }
+            }
+            // Release derived permutations no longer used by any transversal.
+            // Essential generators remain, so changing the base preserves the group.
+            self.retained.clone_from(&self.essential);
+            for level in &self.chain {
+                for &id in &level.transversal {
+                    if id != PermId::NONE && id != PermId::IDENTITY {
+                        self.retained[id.0 as usize] = true;
+                    }
+                }
+            }
+            self.generators.retain(|&id| {
+                if self.retained[id.0 as usize] { true }
+                else { self.arena.free(id); false }
+            });
+            self.expand_schreier();
+        }
+        let orbits = &self.chain[depth].orbits;
+        let mut next = cell.next_set_bit(0);
+        while let Some(v) = next {
+            if orbits[v] != v as u32 { cell.unset_bit(v); }
+            next = cell.next_set_bit(v + 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn closure(generators: &[Vec<u32>], n: usize) -> Vec<Vec<u32>> {
+        let mut group = vec![(0..n as u32).collect::<Vec<_>>()];
+        let mut seen = HashSet::from([group[0].clone()]);
+        let mut i = 0;
+        while i < group.len() {
+            for g in generators {
+                let p: Vec<_> = group[i].iter().map(|&v| g[v as usize]).collect();
+                if seen.insert(p.clone()) { group.push(p); }
+            }
+            i += 1;
+        }
+        group
+    }
+
+    #[test]
+    fn pruning_respects_every_pointwise_stabilizer() {
+        let mut rng = RngState::new();
+        let mut chain = SchreierSims::default();
+        for n in [5, 3, 6, 1, 4, 0, 5] {
+            for _ in 0..20 {
+                chain.reset(n);
+                let mut generators = Vec::new();
+                for _ in 0..3 {
+                    let mut g: Vec<_> = (0..n as u32).collect();
+                    for i in 1..n { g.swap(i, rng.next_random() % (i + 1)); }
+                    chain.add_generator(&g);
+                    generators.push(g);
+                    let group = closure(&generators, n);
+                    // Deliberately switch incompatible bases and shorten them.
+                    for mask in (0..1usize << n).rev() {
+                        let mut fixed = vec![0usize; n.div_ceil(64)];
+                        let mut cell = fixed.clone();
+                        for v in 0..n {
+                            cell.set_bit(v);
+                            if mask & (1 << v) != 0 { fixed.set_bit(v); }
+                        }
+                        chain.prune_set(&fixed, &mut cell);
+                        for v in 0..n {
+                            if !cell.is_bit_set(v) {
+                                assert!(group.iter().any(|p| {
+                                    p[v] < v as u32 && (0..n).all(|w| mask & (1 << w) == 0 || p[w] == w as u32)
+                                }), "unsound pruning: n={n}, mask={mask}, v={v}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn symmetric_group_actually_prunes_below_fixed_points() {
+        let mut chain = SchreierSims::new(6);
+        chain.add_generator(&[1, 2, 3, 4, 5, 0]);
+        chain.add_generator(&[1, 0, 2, 3, 4, 5]);
+        let mut fixed = vec![0usize];
+        fixed.set_bit(0);
+        fixed.set_bit(2);
+        let mut cell = vec![0usize];
+        for v in [1, 3, 4, 5] { cell.set_bit(v); }
+        chain.prune_set(&fixed, &mut cell);
+        assert_eq!(cell, vec![1usize << 62]);
+        assert!(chain.context.mult_count > 0);
+    }
+
+    #[test]
+    fn permutation_powers_match_repeated_composition() {
+        let n = 71;
+        let permutation: Vec<_> = (0..n).map(|i| ((i + 1) % n) as u32).collect();
+        let mut context = SchreierArenaContext::new(n);
+        for power in [0, 1, 2, 3, 4, 5, 6, 7, 11, 19, 20, 70, 71, 137] {
+            let mut actual: Vec<_> = (0..n as u32).rev().collect();
+            let mut expected = actual.clone();
+            for _ in 0..power {
+                for v in &mut expected { *v = permutation[*v as usize]; }
+            }
+            SchreierSims::apply_perm(&mut actual, &permutation, power,
+                &mut context.working_permutation_a, &mut context.working_permutation_b,
+                &mut context.working_set2);
+            assert_eq!(actual, expected);
+        }
     }
 }

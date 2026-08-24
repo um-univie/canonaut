@@ -7,7 +7,7 @@ use crate::{
         check_build_consistency,
     },
     simd_ops,
-    structs::{BitSetOpsMSB0, manager::*, schreier_arena::SchreierSims},
+    structs::{BitSetOpsMSB0, manager::*},
     utilities::safe_orbjoin,
 };
 
@@ -137,9 +137,6 @@ pub fn canonicalize(
 
     let initstatus: u32;
 
-    // Moves schreier_context into algorithm_context for the duration of this call;
-    // options.schreier_context is left empty afterward.
-    options.algorithm_context.schreiersims.context = std::mem::take(&mut options.schreier_context);
     options.algorithm_context.dispatch = options.dispatch;
 
     // Set up refine function
@@ -305,8 +302,7 @@ pub fn canonicalize(
     }
 
     if options.algorithm_context.use_schreier_sims {
-        options.algorithm_context.schreiersims =
-            SchreierSims::new(options.algorithm_context.number_of_vertices as usize);
+        options.algorithm_context.schreiersims.reset(options.algorithm_context.number_of_vertices as usize);
     }
 
     // Initialize orbits and stats
@@ -993,7 +989,7 @@ fn othernode0_rust(
             if context.use_schreier_sims {
                 // SAFETY: current_node_index was just allocated/retrieved from the pool
                 let target_cell = unsafe { context.target_cell_node_pool.get_node_unchecked_mut(current_node_index) };
-                let _ = context
+                context
                     .schreiersims
                     .prune_set(&context.fixed_points, &mut target_cell.cell_data);
             }
@@ -1190,7 +1186,7 @@ fn processnode(
             if context.use_schreier_sims {
                 context
                     .schreiersims
-                    .add_generator(context.work_permutation.as_slice());
+                    .add_generator(&context.work_permutation[..context.number_of_vertices as usize]);
             }
             // This automorphism reaches the first leaf. Backtracking relative
             // to the canonical leaf can skip branches and lose generators.
@@ -1243,7 +1239,7 @@ fn processnode(
             if context.use_schreier_sims {
                 context
                     .schreiersims
-                    .add_generator(context.work_permutation.as_slice());
+                    .add_generator(&context.work_permutation[..context.number_of_vertices as usize]);
             }
             if orbits[context.coset_vertex as usize] < context.coset_vertex {
                 return context.gca_first_level as i32;
