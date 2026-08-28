@@ -26,6 +26,7 @@ pub fn kill_requested() -> bool {
 }
 
 pub fn permute_set(set1: &[usize], set2: &mut [usize], words_per_vertex: u32, permutation: &[u32]) {
+    // Clearing the lowest bit keeps iteration independent of the index lookup.
     match words_per_vertex {
         1 => permute_set_single_word(set1, set2, permutation),
         2 => permute_set_two_words(set1, set2, permutation),
@@ -40,10 +41,10 @@ fn permute_set_single_word(set1: &[usize], set2: &mut [usize], permutation: &[u3
     // SAFETY: caller guarantees set1.len() >= 1.
     let mut remaining_bits = unsafe { *set1.get_unchecked(0) };
     while remaining_bits != 0 {
-        let source_bit_position = remaining_bits.leading_zeros();
-        // Clear this bit (MSB-0 position source_bit_position = bit at 1<<(63-source_bit_position))
-        remaining_bits &= !(1usize << (usize::BITS - 1 - source_bit_position));
-        // SAFETY: source_bit_position < 64 ≤ permutation.len(), permutation[source_bit_position] < n ≤ 64
+        let source_bit_position = usize::BITS - 1 - remaining_bits.trailing_zeros();
+        remaining_bits &= remaining_bits - 1;
+        // SAFETY: padding bits are zero, so source_bit_position < n and the
+        // permutation maps that vertex to another vertex below n <= 64.
         let mapped_bit_position = unsafe { *permutation.get_unchecked(source_bit_position as usize) };
         permuted_word |= 1usize << (usize::BITS - 1 - mapped_bit_position);
     }
@@ -62,8 +63,8 @@ fn permute_set_two_words(set1: &[usize], set2: &mut [usize], permutation: &[u32]
     // SAFETY: caller guarantees set1.len() >= 2.
     let mut source_word0 = unsafe { *set1.get_unchecked(0) };
     while source_word0 != 0 {
-        let bit_index = source_word0.leading_zeros() as usize;
-        source_word0 &= !(1usize << (usize::BITS as usize - 1 - bit_index));
+        let bit_index = (usize::BITS - 1 - source_word0.trailing_zeros()) as usize;
+        source_word0 &= source_word0 - 1;
         // SAFETY: bit_index < 64 < n = permutation.len().
         let mapped_bit_position = unsafe { *permutation.get_unchecked(bit_index) } as usize;
         if mapped_bit_position < 64 {
@@ -74,10 +75,10 @@ fn permute_set_two_words(set1: &[usize], set2: &mut [usize], permutation: &[u32]
     }
     let mut source_word1 = unsafe { *set1.get_unchecked(1) };
     while source_word1 != 0 {
-        let bit_index_in_word1 = source_word1.leading_zeros() as usize;
-        source_word1 &= !(1usize << (usize::BITS as usize - 1 - bit_index_in_word1));
+        let bit_index_in_word1 = (usize::BITS - 1 - source_word1.trailing_zeros()) as usize;
+        source_word1 &= source_word1 - 1;
         let source_bit_position = 64 + bit_index_in_word1;
-        // SAFETY: source_bit_position < 128 = n.
+        // SAFETY: padding bits are zero, so source_bit_position < n <= 128.
         let mapped_bit_position = unsafe { *permutation.get_unchecked(source_bit_position) } as usize;
         if mapped_bit_position < 64 {
             permuted_word0 |= 1usize << (63 - mapped_bit_position);
@@ -113,9 +114,9 @@ fn permute_set_multiword(
         // SAFETY: caller guarantees set1.len() >= word_count.
         let mut current_set_word = unsafe { *set1.get_unchecked(source_word_index) };
         while current_set_word != 0 {
-            let bit_index = current_set_word.leading_zeros() as usize;
-            current_set_word &= !(1usize << (usize::BITS as usize - 1 - bit_index));
-            // SAFETY: source_word_index*64 + bit_index < words_per_vertex*64, within permutation.len().
+            let bit_index = (usize::BITS - 1 - current_set_word.trailing_zeros()) as usize;
+            current_set_word &= current_set_word - 1;
+            // SAFETY: zero padding keeps the source vertex below permutation.len().
             let target_bit_position =
                 unsafe { *permutation.get_unchecked((source_word_index << 6) + bit_index) } as usize;
             let target_word_index = target_bit_position >> 6;

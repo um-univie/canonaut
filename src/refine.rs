@@ -85,7 +85,7 @@ pub fn is_automorphism(
 }
 
 /// Automorphism check for the single-word case (n ≤ 64, words_per_vertex == 1).
-/// Iterates set bits with leading_zeros + bitmask shifts; no slice-indexing overhead.
+/// Iterates set bits by clearing the lowest bit; no slice-indexing overhead.
 #[inline(always)]
 fn is_automorphism_single_word(
     graph: &[usize],
@@ -113,10 +113,8 @@ fn is_automorphism_single_word(
         };
 
         while remaining_neighbors != 0 {
-            // MSB-0: leading_zeros gives the column index of the next set bit.
-            let neighbor = remaining_neighbors.leading_zeros() as usize;
-            // Clear bit at MSB-0 position `neighbor`.
-            remaining_neighbors &= !(1usize << (usize::BITS as usize - 1 - neighbor));
+            let neighbor = (usize::BITS - 1 - remaining_neighbors.trailing_zeros()) as usize;
+            remaining_neighbors &= remaining_neighbors - 1;
 
             // SAFETY: neighbor < n = permutation.len()
             let mapped_neighbor = unsafe { *permutation.get_unchecked(neighbor) } as usize;
@@ -164,8 +162,8 @@ fn is_automorphism_two_words(
 
         // Iterate bits in word 0 (columns 0..63)
         while remaining_word0 != 0 {
-            let column = remaining_word0.leading_zeros() as usize; // MSB-0 column index
-            remaining_word0 &= !(1usize << (usize::BITS as usize - 1 - column));
+            let column = (usize::BITS - 1 - remaining_word0.trailing_zeros()) as usize;
+            remaining_word0 &= remaining_word0 - 1;
             // SAFETY: column < 64 < n = permutation.len()
             let mapped_column = unsafe { *permutation.get_unchecked(column) } as usize;
             // Test bit mapped_column in mapped vertex's row (MSB-0): word mapped_column>>6, bit 63-(mapped_column&63)
@@ -181,10 +179,10 @@ fn is_automorphism_two_words(
 
         // Iterate bits in word 1 (columns 64..127)
         while remaining_word1 != 0 {
-            let bit_in_word1 = remaining_word1.leading_zeros() as usize;
+            let bit_in_word1 = (usize::BITS - 1 - remaining_word1.trailing_zeros()) as usize;
             let column = 64 + bit_in_word1;
-            remaining_word1 &= !(1usize << (usize::BITS as usize - 1 - bit_in_word1));
-            // SAFETY: column < 128 = n
+            remaining_word1 &= remaining_word1 - 1;
+            // SAFETY: zero padding keeps column < n <= 128.
             let mapped_column = unsafe { *permutation.get_unchecked(column) } as usize;
             let (selected_word, selected_bit) = if mapped_column < 64 {
                 (mapped_word0, mapped_column)
@@ -212,14 +210,19 @@ fn is_automorphism_multiword(
         let mapped_vertex = unsafe { *permutation.get_unchecked(vertex) } as usize;
         let mapped_edges = unsafe { graph.get_unchecked(mapped_vertex * words_per_vertex..(mapped_vertex + 1) * words_per_vertex) };
 
-        let mut next_search_start = if is_directed_graph { 0 } else { vertex + 1 };
-
-        while let Some(neighbor) = current_edges.next_set_bit(next_search_start) {
-            let mapped_neighbor = unsafe { *permutation.get_unchecked(neighbor) } as usize;
-            if !mapped_edges.is_bit_set(mapped_neighbor) {
-                return false;
+        let first_neighbor = if is_directed_graph { 0 } else { vertex + 1 };
+        let first_word = first_neighbor / 64;
+        for (word_index, &word) in current_edges.iter().enumerate().skip(first_word) {
+            let mut remaining = if word_index == first_word {
+                word & (usize::MAX >> (first_neighbor % 64))
+            } else { word };
+            while remaining != 0 {
+                let neighbor = word_index * 64 + 63 - remaining.trailing_zeros() as usize;
+                remaining &= remaining - 1;
+                // SAFETY: input padding is zero and the permutation maps 0..n onto itself.
+                let mapped_neighbor = unsafe { *permutation.get_unchecked(neighbor) } as usize;
+                if !mapped_edges.is_bit_set(mapped_neighbor) { return false; }
             }
-            next_search_start = neighbor + 1;
         }
     }
     true
