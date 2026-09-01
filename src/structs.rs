@@ -1,8 +1,10 @@
 pub mod bitset;
 pub mod graph;
 pub mod manager;
-pub mod schreier_arena;
-pub mod target_cell;
+#[allow(dead_code)]
+pub(crate) mod schreier_arena;
+#[allow(dead_code)]
+pub(crate) mod target_cell;
 
 pub use bitset::*;
 pub use graph::*;

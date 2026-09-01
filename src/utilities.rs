@@ -14,7 +14,7 @@ const WORD_SHIFT: u32 = WORD_SIZE.trailing_zeros();
 /// * `permutation` — a permutation; elements `i` and `permutation[i]` are merged into one orbit.
 /// * `vertex_count` — number of elements; both slices must be at least `vertex_count` long.
 #[inline]
-pub fn safe_orbjoin(orbits: &mut [u32], permutation: &[u32], vertex_count: u32) -> u32 {
+pub(crate) fn safe_orbjoin(orbits: &mut [u32], permutation: &[u32], vertex_count: u32) -> u32 {
     if vertex_count == 0 || orbits.len() < vertex_count as usize || permutation.len() < vertex_count as usize {
         return 0;
     }

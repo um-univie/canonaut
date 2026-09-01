@@ -26,7 +26,7 @@ pub fn multiply(number1: &mut f64, number2: &mut u32, factor: u32) {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// use canonaut::search::validate_input;
 /// use canonaut::consts::ALGORITHM_INFINITY;
 /// let result = validate_input(1, 10);

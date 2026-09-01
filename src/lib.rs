@@ -27,7 +27,7 @@
 //! |--------|---------|
 //! [`structs`] | Public types: [`structs::CanonautManager`], [`structs::DenseGraph`], [`structs::SparseGraph`], [`structs::Statistics`] |
 //! [`graph6`] | graph6 file format parser (sparse6/digraph6 are rejected) |
-//! [`utilities`] | Low-level helpers: [`utilities::words_needed`], [`utilities::safe_orbjoin`] |
+//! [`utilities`] | Bit-matrix dimensions: [`utilities::words_needed`] |
 //! [`structs::bitset`] | [`structs::BitSetOpsMSB0`] trait — MSB-0 bitset operations on `[usize]` |
 
 // The core search routines mirror nauty's C entry points (`nauty()`,
@@ -37,16 +37,24 @@
 // likewise a direct translation of nauty's `dispatchvec` function pointers.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-pub mod bit_ops;
+// Internal kernels assume invariants established by the manager. Some unused
+// nauty port helpers are retained for reference, but are not part of the API.
+#[allow(dead_code)]
+pub(crate) mod bit_ops;
 pub mod generators;
 pub mod graph6;
-pub mod simd_ops;
-pub mod consts;
+#[allow(dead_code)]
+pub(crate) mod simd_ops;
+pub(crate) mod consts;
 pub mod io;
-pub mod refine;
-pub mod rng;
-pub mod support;
-pub mod search;
+#[allow(dead_code)]
+pub(crate) mod refine;
+#[allow(dead_code)]
+pub(crate) mod rng;
+#[allow(dead_code)]
+pub(crate) mod support;
+#[allow(dead_code)]
+pub(crate) mod search;
 pub mod structs;
 pub mod utilities;
 
@@ -54,3 +62,6 @@ pub mod utilities;
 mod test_vectors;
 #[cfg(test)]
 mod tests;
+
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("canonaut currently requires a 64-bit target");

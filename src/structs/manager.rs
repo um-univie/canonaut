@@ -2,8 +2,7 @@
 //!
 //! The primary entry point for most users is [`CanonautManager`], which owns all
 //! algorithm buffers and exposes a single [`CanonautManager::canonize`] method.
-//! [`CanonautOptions`] and [`AlgorithmContext`] are lower-level types used when
-//! finer control over dispatch or callbacks is needed.
+//! Search options and working contexts are internal implementation details.
 
 use crate::consts::ALGORITHM_INFINITY;
 use crate::io::OutputStream;
@@ -23,7 +22,8 @@ use crate::utilities::words_needed;
 /// monotonically via [`AlgorithmContext::ensure_capacity`] and are reused across
 /// repeated calls to avoid allocation pressure on the hot path.
 #[derive(Default)]
-pub struct AlgorithmContext {
+#[allow(dead_code)]
+pub(crate) struct AlgorithmContext {
     // ---- configuration ----
     /// Compute and store the canonical graph.
     pub get_canonical: bool,
@@ -152,6 +152,7 @@ pub struct AlgorithmContext {
     pub first_target_cell: Vec<i32>,
 }
 
+#[allow(dead_code)]
 impl AlgorithmContext {
     /// Creates a zeroed context pre-sized for `number_of_vertices` vertices.
     pub fn new(number_of_vertices: u32) -> Self {
@@ -240,7 +241,8 @@ impl AlgorithmContext {
 /// refinement, automorphism-check, or target-cell strategies.
 #[derive(Copy, Clone, Default)]
 #[repr(C)]
-pub struct DispatchVec {
+#[allow(dead_code)]
+pub(crate) struct DispatchVec {
     pub is_automorphism: Option<fn(&[usize], &[u32], bool, u32, u32) -> bool>,
     pub test_canonical_labeling:
         Option<fn(&[usize], &[usize], &mut [u32], &mut u32, u32, u32, &mut GraphContext) -> i32>,
@@ -370,10 +372,10 @@ impl Statistics {
 
 /// Full configuration block passed to the core `canonicalize()` function.
 ///
-/// Most users interact with [`CanonautManager`] builder methods instead of
-/// constructing `CanonautOptions` directly.  The [`Default`] implementation
-/// sets sensible values (dense dispatch, no callbacks, `line_length = 78`).
-pub struct CanonautOptions {
+/// Configured through [`CanonautManager`] builders. Defaults to dense dispatch,
+/// no callbacks and `line_length = 78`.
+#[allow(dead_code)]
+pub(crate) struct CanonautOptions {
     /// Compute and store the canonical graph after each call.
     pub get_canonical: bool,
     /// Treat the input as a directed graph.

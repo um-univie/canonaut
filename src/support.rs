@@ -145,7 +145,7 @@ pub fn int_to_string(integer: u32, s: &mut String) {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// use canonaut::support::compute_orbits;
 /// let permutation = [1, 2, 0, 4, 3];
 /// // Cycles: (0 -> 1 -> 2 -> 0) and (3 -> 4 -> 3)
