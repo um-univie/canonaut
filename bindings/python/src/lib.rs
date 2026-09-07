@@ -13,7 +13,7 @@ use pyo3::types::PyBytes;
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    static GENERATORS: RefCell<Vec<Vec<u32>>> = RefCell::new(Vec::new());
+    static GENERATORS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
 }
 
 fn capture_generator(
@@ -31,7 +31,12 @@ fn capture_generator(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn build_adjacency(n: usize, edges: &[(usize, usize)], directed: bool) -> Vec<usize> {
+fn build_adjacency(n: usize, edges: &[(usize, usize)], directed: bool) -> PyResult<Vec<usize>> {
+    if let Some(&(u, v)) = edges.iter().find(|&&(u, v)| u >= n || v >= n) {
+        return Err(PyValueError::new_err(format!(
+            "edge ({u}, {v}) has a vertex outside 0..{n}"
+        )));
+    }
     let m = words_needed(n);
     let mut adj = vec![0usize; n * m];
     for &(u, v) in edges {
@@ -40,7 +45,7 @@ fn build_adjacency(n: usize, edges: &[(usize, usize)], directed: bool) -> Vec<us
             adj[v * m..(v + 1) * m].set_bit(u);
         }
     }
-    adj
+    Ok(adj)
 }
 
 fn edges_from_bitmatrix(adj: &[usize], n: usize, m: usize) -> Vec<(usize, usize)> {
@@ -63,7 +68,7 @@ fn edges_from_bitmatrix(adj: &[usize], n: usize, m: usize) -> Vec<(usize, usize)
 #[pyclass]
 struct CanonResult {
     #[pyo3(get)]
-    /// Canonical labeling: labeling[i] = canonical index of original vertex i.
+    /// Canonical labeling: labeling[i] = original vertex at canonical position i.
     labeling: Vec<u32>,
     #[pyo3(get)]
     /// Orbit representative for each vertex: orbits[i] = orbit id of vertex i.
@@ -87,6 +92,8 @@ struct CanonResult {
     canonical_words: Vec<usize>,
     n: usize,
     m: usize,
+    directed: bool,
+    canonical_colors: Option<Vec<u32>>,
 }
 
 #[pymethods]
@@ -102,15 +109,26 @@ impl CanonResult {
         )
     }
 
-    /// Return the canonical bitmatrix as a `bytes` object (big-endian words).
+    /// Return a versioned key containing graph order, directedness, adjacency,
+    /// and fixed vertex-color labels in canonical order (big-endian integers).
     ///
     /// Suitable as a hashable canonical key:
     /// ``canon_a.canonical_bytes() == canon_b.canonical_bytes()``
     /// iff the two graphs are isomorphic.
     fn canonical_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        let mut buf: Vec<u8> = Vec::with_capacity(self.n * self.m * 8);
+        let color_bytes = self.canonical_colors.as_ref().map_or(0, |c| c.len() * 4);
+        let mut buf: Vec<u8> = Vec::with_capacity(14 + self.n * self.m * 8 + color_bytes);
+        buf.extend_from_slice(b"CNA\x01");
+        buf.extend_from_slice(&(self.n as u64).to_be_bytes());
+        buf.push(u8::from(self.directed));
+        buf.push(u8::from(self.canonical_colors.is_some()));
         for &w in &self.canonical_words[..self.n * self.m] {
             buf.extend_from_slice(&(w as u64).to_be_bytes());
+        }
+        if let Some(colors) = &self.canonical_colors {
+            for color in colors {
+                buf.extend_from_slice(&color.to_be_bytes());
+            }
         }
         PyBytes::new(py, &buf)
     }
@@ -137,7 +155,7 @@ impl CanonResult {
 ///     One color per vertex (length must equal ``n``). Vertices with different
 ///     colors are never mapped onto each other by any automorphism, and the
 ///     canonical form respects the coloring. Colors need not be contiguous or
-///     sorted — only which vertices share a color matters. Default: uncolored.
+///     sorted. Values are fixed labels across graphs. Default: uncolored.
 ///
 /// Returns
 /// -------
@@ -146,7 +164,7 @@ impl CanonResult {
 /// Examples
 /// --------
 /// >>> import canonaut
-/// >>> r = canonaut.canonize(6, [(0,1),(1,2),(2,3),(3,4),(4,5),(5,0)])
+/// >>> r = canonaut.raw.canonize(6, [(0,1),(1,2),(2,3),(3,4),(4,5),(5,0)])
 /// >>> r.num_orbits
 /// 1
 #[pyfunction]
@@ -158,30 +176,34 @@ fn canonize(
     generators: bool,
     colors: Option<Vec<u32>>,
 ) -> PyResult<CanonResult> {
-    let adj = build_adjacency(n, &edges, directed);
+    if let Some(colors) = colors.as_ref().filter(|colors| colors.len() != n) {
+        return Err(PyValueError::new_err(format!(
+            "colors has length {} but n={n}",
+            colors.len()
+        )));
+    }
+    let adj = build_adjacency(n, &edges, directed)?;
 
     let mut mgr = CanonautManager::new(n).with_canonization();
+    // Loops require the full automorphism check even on symmetric adjacency.
+    if directed || edges.iter().any(|&(u, v)| u == v) {
+        mgr = mgr.with_digraph();
+    }
     if generators {
         GENERATORS.with(|g| g.borrow_mut().clear());
         mgr = mgr.with_automorphism_callback(capture_generator);
     }
-    match colors {
-        Some(colors) => {
-            if colors.len() != n {
-                return Err(PyValueError::new_err(format!(
-                    "colors has length {} but n={}",
-                    colors.len(),
-                    n
-                )));
-            }
-            mgr.canonize_with_colors(&adj, &colors);
-        }
+    match &colors {
+        Some(colors) => mgr.canonize_with_colors(&adj, colors),
         None => mgr.canonize(&adj),
     }
 
     let m = words_needed(n);
     let stats = mgr.statistics();
     let labeling = mgr.labeling()[..n].to_vec();
+    let canonical_colors = colors
+        .filter(|c| !c.is_empty())
+        .map(|c| labeling.iter().map(|&v| c[v as usize]).collect());
     let orbits_vec = mgr.orbits()[..n].to_vec();
     let canonical_words = mgr.canonical_graph[..n * m].to_vec();
     let canonical_edges = edges_from_bitmatrix(&canonical_words, n, m);
@@ -203,6 +225,8 @@ fn canonize(
         canonical_words,
         n,
         m,
+        directed,
+        canonical_colors,
     })
 }
 
@@ -228,19 +252,22 @@ fn are_isomorphic(
     n2: usize,
     edges2: Vec<(usize, usize)>,
     directed: bool,
-) -> bool {
-    if n1 != n2 || edges1.len() != edges2.len() {
-        return false;
+) -> PyResult<bool> {
+    if n1 != n2 {
+        return Ok(false);
     }
     let n = n1;
     let m = words_needed(n);
-    let adj1 = build_adjacency(n, &edges1, directed);
-    let adj2 = build_adjacency(n, &edges2, directed);
+    let adj1 = build_adjacency(n, &edges1, directed)?;
+    let adj2 = build_adjacency(n, &edges2, directed)?;
     let mut mgr = CanonautManager::new(n).with_canonization();
+    if directed || edges1.iter().chain(&edges2).any(|&(u, v)| u == v) {
+        mgr = mgr.with_digraph();
+    }
     mgr.canonize(&adj1);
     let canon1 = mgr.canonical_graph[..n * m].to_vec();
     mgr.canonize(&adj2);
-    canon1 == mgr.canonical_graph[..n * m]
+    Ok(canon1 == mgr.canonical_graph[..n * m])
 }
 
 // ---------------------------------------------------------------------------

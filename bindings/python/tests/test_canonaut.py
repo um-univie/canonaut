@@ -8,6 +8,7 @@ or, if pytest is installed:
 """
 
 import unittest
+import itertools
 
 import canonaut
 
@@ -51,7 +52,8 @@ class TestCanonize(unittest.TestCase):
             [(0, 1), (1, 2), (2, 3)], colors={0: "end", 3: "end"}
         )
         uncolored = canonaut.canonize([(0, 1), (1, 2), (2, 3)])
-        self.assertEqual(colored.canonical_bytes(), uncolored.canonical_bytes())
+        # The automorphism group is unchanged, but colors are part of the key.
+        self.assertNotEqual(colored.canonical_bytes(), uncolored.canonical_bytes())
         self.assertEqual(colored.num_orbits, uncolored.num_orbits)
 
     def test_colors_on_one_vertex_breaks_symmetry(self):
@@ -90,15 +92,102 @@ class TestCanonize(unittest.TestCase):
         g = nx.cycle_graph(["x", "y", "z", "w"])
         r = canonaut.canonize(g)
         self.assertEqual(r.num_orbits, 1)
+        self.assertEqual(r.group_size1, 8.0)
+
+
+class TestCorrectnessRegressions(unittest.TestCase):
+    def test_directed_path_has_no_nontrivial_automorphism(self):
+        r = canonaut.raw.canonize(4, [(0, 2), (1, 0)], directed=True)
+        self.assertEqual(r.group_size1, 1.0)
+        self.assertEqual(r.num_orbits, 4)
+
+    def test_all_three_vertex_digraph_groups_against_brute_force(self):
+        slots = list(itertools.product(range(3), repeat=2))
+        permutations = list(itertools.permutations(range(3)))
+        for mask in range(1 << len(slots)):
+            edges = {edge for i, edge in enumerate(slots) if mask & (1 << i)}
+            automorphisms = [p for p in permutations if {(p[u], p[v]) for u, v in edges} == edges]
+            r = canonaut.raw.canonize(3, list(edges), directed=True, generators=True)
+            self.assertEqual(r.group_size1, len(automorphisms), (mask, edges))
+            for p in r.generators:
+                self.assertIn(tuple(p), automorphisms)
+
+    def test_colored_keys_do_not_depend_on_node_order(self):
+        edges = [(0, 1), (1, 2)]
+        colors = {0: "red", 1: "blue", 2: "blue"}
+        keys = {canonaut.canonize(edges, nodes=order, colors=colors).canonical_bytes()
+                for order in itertools.permutations(range(3))}
+        self.assertEqual(len(keys), 1)
+
+    def test_fixed_color_labels_and_partitions_are_in_the_key(self):
+        keys = {canonaut.canonize([], nodes=[0, 1], colors=colors).canonical_bytes()
+                for colors in [None, [0, 0], [0, 1], [1, 1], ["red", "red"]]}
+        self.assertEqual(len(keys), 5)
+        raw_keys = {canonaut.raw.canonize(2, [], colors=colors).canonical_bytes()
+                    for colors in [None, [0, 0], [0, 1], [1, 1]]}
+        self.assertEqual(len(raw_keys), 4)
+
+    def test_colored_keys_are_invariant_under_relabeling(self):
+        a = canonaut.canonize([(0, 1), (1, 2)], colors={0: "red", 1: "blue", 2: "blue"})
+        b = canonaut.canonize([("z", "x"), ("y", "z")],
+                             colors={"y": "red", "z": "blue", "x": "blue"})
+        self.assertEqual(a.canonical_bytes(), b.canonical_bytes())
+
+    def test_stable_composite_and_numeric_colors(self):
+        for a, b in [(1, 1.0), (True, 1), (0.0, -0.0),
+                     (("C", frozenset([1, 2])), ("C", frozenset([2.0, 1.0])))]:
+            self.assertEqual(canonaut.canonize([], nodes=[0], colors=[a]).canonical_bytes(),
+                             canonaut.canonize([], nodes=[0], colors=[b]).canonical_bytes())
+        with self.assertRaises(TypeError):
+            canonaut.canonize([], nodes=[0], colors=[object()])
+        with self.assertRaises(ValueError):
+            canonaut.canonize([], nodes=[0], colors=[float("nan")])
+
+    def test_directedness_is_in_the_key(self):
+        self.assertNotEqual(canonaut.canonize([], nodes=[0]).canonical_bytes(),
+                            canonaut.canonize([], nodes=[0], directed=True).canonical_bytes())
+
+    def test_empty_graphs(self):
+        r = canonaut.canonize([])
+        self.assertEqual(r.labeling, [])
+        self.assertEqual(r.group_size1, 1.0)
+        self.assertEqual(r.num_orbits, 0)
+        self.assertTrue(canonaut.are_isomorphic([], []))
+        self.assertEqual(r.canonical_bytes(), canonaut.canonize([], colors=[]).canonical_bytes())
+
+    def test_implicit_uncolored_labels_match_an_uncolored_graph(self):
+        expected = canonaut.canonize([(0, 1)]).canonical_bytes()
+        for colors in [{}, [None, None]]:
+            self.assertEqual(expected, canonaut.canonize([(0, 1)], colors=colors).canonical_bytes())
+
+    def test_raw_invalid_vertices_are_value_errors(self):
+        for directed in [False, True]:
+            with self.assertRaises(ValueError):
+                canonaut.raw.canonize(3, [(0, 3)], directed=directed)
+            with self.assertRaises(ValueError):
+                canonaut.raw.are_isomorphic(3, [(3, 0)], 3, [(0, 1)], directed=directed)
+
+    def test_duplicate_nodes_and_edges_do_not_change_a_simple_graph(self):
+        self.assertEqual(len(canonaut.canonize([(0, 1)], nodes=[0, 0, 1]).labeling), 2)
+        self.assertTrue(canonaut.are_isomorphic([(0, 1)], [(0, 1), (1, 0)]))
+
+    def test_mixed_graph_kinds_are_not_isomorphic(self):
+        nx = _import_networkx_or_skip(self)
+        a, b = nx.Graph([(0, 1)]), nx.DiGraph([(0, 1)])
+        self.assertFalse(canonaut.are_isomorphic(a, b))
+        self.assertFalse(canonaut.are_isomorphic(b, a))
+
+    def test_undirected_loops_preserve_the_correct_group(self):
+        r = canonaut.raw.canonize(3, [(0, 0)])
+        self.assertEqual(r.group_size1, 2.0)
+        self.assertEqual(r.num_orbits, 2)
 
     def test_networkx_directed_is_detected(self):
         nx = _import_networkx_or_skip(self)
         g = nx.DiGraph([(0, 1), (1, 2), (2, 0)])
         r = canonaut.canonize(g)
-        # A directed 3-cycle has a trivial-vs-symmetric group depending on
-        # orientation; the point of this test is just that it runs without
-        # requiring an explicit directed=True.
         self.assertEqual(r.num_orbits, 1)
+        self.assertEqual(r.group_size1, 3.0)
 
 
 class TestAreIsomorphic(unittest.TestCase):

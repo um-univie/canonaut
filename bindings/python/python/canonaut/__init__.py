@@ -32,7 +32,7 @@ def _graph_like(g):
 def _resolve_nodes(edges, nodes):
     """Node list in a deterministic order: `nodes` first (if given), then any
     further nodes seen only in `edges`, in first-appearance order."""
-    resolved = list(nodes) if nodes is not None else []
+    resolved = list(dict.fromkeys(nodes)) if nodes is not None else []
     seen = set(resolved)
     for u, v in edges:
         for node in (u, v):
@@ -42,27 +42,58 @@ def _resolve_nodes(edges, nodes):
     return resolved
 
 
+def _pack_color_parts(tag, parts):
+    return tag + b"".join(len(part).to_bytes(8, "big") + part for part in parts)
+
+
+def _encode_color(value):
+    """Stable, injective tokens for supported color labels, respecting 1 == 1.0."""
+    if value is _UNCOLORED or value is None:
+        return b"u"
+    if isinstance(value, (int, float)):
+        if isinstance(value, float):
+            if value != value:
+                raise ValueError("NaN is not a valid vertex color")
+            if value in (float("inf"), float("-inf")):
+                return b"n+inf" if value > 0 else b"n-inf"
+            numerator, denominator = value.as_integer_ratio()
+        else:
+            numerator, denominator = int(value), 1
+        return f"n{numerator}/{denominator}".encode("ascii")
+    if isinstance(value, str):
+        return b"s" + value.encode("utf-8", "surrogatepass")
+    if isinstance(value, bytes):
+        return b"b" + value
+    if isinstance(value, tuple):
+        return _pack_color_parts(b"t", [_encode_color(item) for item in value])
+    if isinstance(value, frozenset):
+        return _pack_color_parts(b"f", sorted({_encode_color(item) for item in value}))
+    raise TypeError(
+        "vertex colors must be numbers, strings, bytes, None, or tuples/frozensets "
+        "of these; map custom objects to stable color labels first"
+    )
+
+
 def _resolve_colors(colors, node_list):
     if colors is None:
-        return None
+        return None, None
     if hasattr(colors, "get"):
         raw_values = [colors.get(node, _UNCOLORED) for node in node_list]
     else:
-        colors = list(colors)
-        if len(colors) != len(node_list):
+        raw_values = list(colors)
+        if len(raw_values) != len(node_list):
             raise ValueError(
-                f"colors has length {len(colors)} but there are {len(node_list)} nodes"
+                f"colors has length {len(raw_values)} but there are {len(node_list)} nodes"
             )
-        raw_values = colors
-    ids: dict = {}
-    result = []
-    for value in raw_values:
-        if value is None:
-            value = _UNCOLORED
-        if value not in ids:
-            ids[value] = len(ids)
-        result.append(ids[value])
-    return result
+    if not raw_values:
+        return None, None
+    raw_values = [_UNCOLORED if value is None else value for value in raw_values]
+    if all(value is _UNCOLORED for value in raw_values):
+        return None, None
+    tokens = {value: _encode_color(value) for value in dict.fromkeys(raw_values)}
+    palette = sorted(set(tokens.values()))
+    ids = {token: index for index, token in enumerate(palette)}
+    return [ids[tokens[value]] for value in raw_values], palette
 
 
 class CanonResult:
@@ -97,15 +128,20 @@ class CanonResult:
         "num_orbits",
         "generators",
         "_raw",
+        "_color_palette",
     )
 
-    def __init__(self, raw_result: _RawCanonResult, node_list: list):
+    def __init__(self, raw_result: _RawCanonResult, node_list: list, color_palette=None):
         n = len(node_list)
         self._raw = raw_result
-        self.labeling = [node_list[raw_result.labeling[i]] for i in range(n)]
+        self._color_palette = color_palette
+        # PyO3 Vec getters copy the list; fetch each once to keep conversion linear.
+        raw_labeling = raw_result.labeling
+        raw_orbits = raw_result.orbits
+        self.labeling = [node_list[vertex] for vertex in raw_labeling]
         groups: dict = {}
         for v in range(n):
-            groups.setdefault(raw_result.orbits[v], []).append(node_list[v])
+            groups.setdefault(raw_orbits[v], []).append(node_list[v])
         self.orbits = list(groups.values())
         self.canonical_edges = raw_result.canonical_edges
         self.group_size1 = raw_result.group_size1
@@ -119,7 +155,10 @@ class CanonResult:
 
     def canonical_bytes(self) -> bytes:
         """Hashable canonical key: equal iff the two graphs are isomorphic."""
-        return self._raw.canonical_bytes()
+        key = self._raw.canonical_bytes()
+        if self._color_palette is not None:
+            key += _pack_color_parts(b"COL\x01", self._color_palette)
+        return key
 
     def __repr__(self) -> str:
         return (
@@ -145,8 +184,9 @@ def canonize(edges, *, nodes=None, colors=None, directed=False, generators=False
         Vertex coloring (partition). As a dict: ``{node: color}`` — nodes not
         present get an implicit shared color distinct from any color you
         supplied. As a sequence: one color per node, aligned with the
-        resolved node order (see `nodes`). Colors can be any hashable value;
-        only which nodes share a color matters. Vertices with different
+        resolved node order (see `nodes`). Colors may be numbers, strings,
+        bytes, None, or tuples/frozensets of these;
+        color values are fixed labels across graphs. Vertices with different
         colors are never mapped onto each other by any automorphism, and the
         canonical form respects the coloring.
     directed : bool, optional
@@ -186,12 +226,12 @@ def canonize(edges, *, nodes=None, colors=None, directed=False, generators=False
     n = len(node_list)
 
     edge_idx = [(index_of[u], index_of[v]) for u, v in edges]
-    color_idx = _resolve_colors(colors, node_list)
+    color_idx, color_palette = _resolve_colors(colors, node_list)
 
     raw_result = raw.canonize(
         n, edge_idx, directed=directed, generators=generators, colors=color_idx
     )
-    return CanonResult(raw_result, node_list)
+    return CanonResult(raw_result, node_list, color_palette)
 
 
 def are_isomorphic(edges1, edges2, *, nodes1=None, nodes2=None, directed=False):
@@ -211,26 +251,32 @@ def are_isomorphic(edges1, edges2, *, nodes1=None, nodes2=None, directed=False):
     -------
     bool
     """
+    directed1 = directed2 = directed
     like1 = _graph_like(edges1)
     if like1 is not None:
         edges1, inferred_nodes1, inferred_directed1 = like1
         if nodes1 is None:
             nodes1 = inferred_nodes1
         if inferred_directed1 is not None:
-            directed = inferred_directed1
+            directed1 = inferred_directed1
 
     like2 = _graph_like(edges2)
     if like2 is not None:
-        edges2, inferred_nodes2, _ = like2
+        edges2, inferred_nodes2, inferred_directed2 = like2
         if nodes2 is None:
             nodes2 = inferred_nodes2
+        if inferred_directed2 is not None:
+            directed2 = inferred_directed2
+
+    if directed1 != directed2:
+        return False
 
     edges1 = list(edges1)
     edges2 = list(edges2)
     node_list1 = _resolve_nodes(edges1, nodes1)
     node_list2 = _resolve_nodes(edges2, nodes2)
 
-    if len(node_list1) != len(node_list2) or len(edges1) != len(edges2):
+    if len(node_list1) != len(node_list2):
         return False
 
     index_of1 = {node: i for i, node in enumerate(node_list1)}
@@ -239,5 +285,5 @@ def are_isomorphic(edges1, edges2, *, nodes1=None, nodes2=None, directed=False):
     edge_idx2 = [(index_of2[u], index_of2[v]) for u, v in edges2]
 
     return raw.are_isomorphic(
-        len(node_list1), edge_idx1, len(node_list2), edge_idx2, directed=directed
+        len(node_list1), edge_idx1, len(node_list2), edge_idx2, directed=directed1
     )

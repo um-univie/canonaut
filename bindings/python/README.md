@@ -71,6 +71,20 @@ canonaut.canonize(edges, directed=True)
 Detected automatically for graph-like objects exposing `.is_directed()` (e.g.
 `networkx.DiGraph`).
 
+### Fixed vertex colors and canonical keys
+
+Color values are fixed labels: an isomorphism must map each color to the same
+value in the other graph. Supported labels are integers, floats (except NaN),
+strings, bytes, `None`, and tuples/frozensets containing these. Python-equal
+numeric values such as `1` and `1.0` denote the same color. `None` and missing
+dictionary entries share the implicit uncolored label. Map custom color objects
+to stable labels before calling `canonize`.
+
+`canonical_bytes()` includes graph order, directedness, and fixed colors as well
+as canonical adjacency. Its versioned format has changed; regenerate previously
+stored keys. The high-level and raw APIs have separate color encodings, so compare
+keys produced through the same API. `canonical_edges` alone does not encode colors.
+
 ## Low-level API
 
 `canonaut.raw` exposes the compiled extension directly: `0..n-1` integer
