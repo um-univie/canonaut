@@ -49,3 +49,21 @@ void c_nauty_dense_canonize_stats(
     *max_level = stats.maxlevel;
     *canon_updates = stats.canupdates;
 }
+
+/* Correctness oracle for colored graphs and digraphs. lab/ptn are initialized
+ * by the caller when colored is true. Keep this independent of Rust's setup. */
+void c_nauty_reference(
+    graph *g, int *lab, int *ptn, int *orbits, graph *canong,
+    int m, int n, int directed, int colored,
+    double *group_size1, int *group_size2
+) {
+    DEFAULTOPTIONS_GRAPH(opts);
+    opts.getcanon = TRUE;
+    opts.digraph = directed;
+    opts.defaultptn = !colored;
+    if (directed) opts.tc_level = 0;
+    statsblk stats;
+    densenauty(g, lab, ptn, orbits, &opts, &stats, m, n, canong);
+    *group_size1 = stats.grpsize1;
+    *group_size2 = stats.grpsize2;
+}
