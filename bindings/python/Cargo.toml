@@ -1,6 +1,6 @@
 [package]
 name = "canonaut-py"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 publish = false
 
@@ -9,5 +9,5 @@ name = "_canonaut"
 crate-type = ["cdylib"]
 
 [dependencies]
-canonaut = { path = "../..", version = "1.0.0" }
+canonaut = { path = "../..", version = "1.1.0" }
 pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }

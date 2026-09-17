@@ -73,20 +73,28 @@ jobs:
           path: dist
 
   smoke-test:
-    name: install and test the built wheel
-    needs: [wheels]
+    name: test ${{ matrix.artifact }} on Python ${{ matrix.python }}
+    needs: [wheels, sdist]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.14"]
+        artifact: [wheels-ubuntu-latest-x86_64, wheels-sdist]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
-          name: wheels-ubuntu-latest-x86_64
+          name: ${{ matrix.artifact }}
           path: dist
-      - run: pip install --find-links dist canonaut pytest networkx
-      - run: pytest bindings/python/tests -v
+      - run: uv venv
+      - name: Install the built artifact
+        run: uv pip install dist/* pytest networkx
+      - run: uv run --no-project pytest bindings/python/tests -v
 
   publish:
     name: publish to PyPI

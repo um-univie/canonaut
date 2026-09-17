@@ -103,8 +103,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
-      - run: pip install maturin pytest networkx
-      - run: maturin build --release --out dist
-        working-directory: bindings/python
-      - run: pip install --find-links bindings/python/dist canonaut
-      - run: pytest bindings/python/tests -v
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv
+      - run: uv pip install maturin pytest networkx
+      - run: uv run --no-project maturin build --release --out bindings/python/dist --manifest-path bindings/python/Cargo.toml
+      - run: uv pip install bindings/python/dist/*.whl
+      - run: uv run --no-project pytest bindings/python/tests -v
