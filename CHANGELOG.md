@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Correctness and performance
+
+- Fix stale active-cell bits and unchecked out-of-bounds reads when reusing a
+  manager on smaller graphs; verify group orders and orbit partitions as well
+  as canonical adjacency.
+- Support empty graphs through the manager and Python APIs; fix active-bitset
+  copy lengths and first-call validation of canonical output buffers.
+- Enable directed search in Python, reject mixed graph kinds in isomorphism
+  tests, validate edge endpoints, and handle duplicate nodes/edges consistently.
+- Make Python colored keys invariant to node order and include fixed color
+  labels and directedness. **Breaking:** canonical byte keys use a new versioned
+  format; stored keys must be regenerated. Color labels are stable built-in
+  values (including tuples/frozensets), rather than arbitrary custom objects.
+- **Breaking:** search/refinement kernels, algorithm options/contexts and
+  Schreier machinery are private. Use `CanonautManager` and its
+  builders; raw adjacency remains supported. Require a 64-bit target explicitly.
+- Remove colored-call sorting allocations, redundant dimension inference and
+  setup, and quadratic Python result-list copying. Size canonical output
+  correctly at construction.
+- Complete optional Schreier stabilizer pruning, including fixed-point base
+  changes, rooted transversals, generator retention and reusable storage. Expose
+  it through `CanonautManager::with_schreier()`; keep it disabled by default.
+- Accelerate adjacency permutation and automorphism checks by clearing the
+  lowest set bit instead of recomputing a shift to clear the highest one.
+- Add optional C-nauty differential tests and configurable nauty include/library
+  directories. See `repro/optimization_review.md` for measured performance.
+
 ### Added
 
 - `test_data/smoke/`: a committed 1 965-graph cross-validation corpus with

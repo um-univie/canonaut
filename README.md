@@ -43,7 +43,7 @@ adjacency matrix.
 
 ## `CanonautManager` — high-level API
 
-`CanonautManager` owns all working buffers and reuses them across calls. Allocate once, run many times — zero allocation on the hot path as long as the graph order doesn't grow (measured by `src/bin/memcheck`, which counts every heap request; see `repro/`).
+`CanonautManager` owns all working buffers and reuses them across calls. Repeated calls, including colored calls, allocate nothing once buffer capacities and search depth have been warmed up. Allocation counts are checked by `src/bin/memcheck` and the allocation regression test; see `repro/`.
 
 ### Canonicalization
 
@@ -113,7 +113,7 @@ assert_eq!(canon_g, canon_h); // isomorphic iff equal
 
 ### Vertex-colored (partitioned) canonicalization
 
-Coloring constrains the search: vertices of different colors are never identified by
+Color values are fixed labels across graphs. Coloring constrains the search: vertices of different colors are never identified by
 an automorphism, and the canonical form respects the coloring. Attach a coloring to
 the graph itself with `set_colors` (picked up automatically by `canonize_graph`), or
 pass colors explicitly per call with `canonize_with_colors` / `canonize_graph_with_colors`
@@ -133,6 +133,10 @@ path_p4.set_colors(vec![0, 0, 1, 1]);
 manager.canonize_graph(&path_p4);
 // colored: 4 orbits, |Aut| = 1 (picked up automatically)
 ```
+
+For colored isomorphism testing, compare both canonical adjacency and the
+canonical color sequence `colors[manager.labeling()[i] as usize]`. Adjacency alone
+does not encode coloring.
 
 ### Directed graphs
 
@@ -194,7 +198,6 @@ println!("{:?}", canon);
 |------|----------|---------|
 | `CanonautManager` | `canonaut::structs` | High-level manager; owns all buffers |
 | `DenseGraph` | `canonaut::structs` | Dense graph container (adjacency + directedness + coloring) |
-| `CanonautOptions` | `canonaut::structs` | Algorithm configuration |
 | `Statistics` | `canonaut::structs` | Output: group size, orbit count, search tree stats |
 | `add_one_edge` | `canonaut::structs` | Add undirected edge to a raw flat adjacency bitmatrix |
 | `add_one_arc` | `canonaut::structs` | Add directed edge (arc) to a raw flat adjacency bitmatrix |
@@ -206,12 +209,12 @@ println!("{:?}", canon);
 cargo test
 ```
 
-runs 105 of the suite's 133 tests with no external tooling, including the
+runs the library and regression tests without external tooling, including the
 committed `test_data/smoke/` corpus: 1 965 graphs (n = 9…129, sampled across
 every corpus below) whose canonical forms are compared byte-for-byte against
 pynauty reference output.
 
-The remaining 28 tests compare against the *full* corpora, which are not
+The 28 ignored library tests compare against the *full* corpora, which are not
 committed (~125 MB) but regenerate deterministically — the `.g6` files are
 exact `geng`/`networkx` output, the `.ref` files pynauty ground truth:
 
@@ -266,7 +269,23 @@ and links the system libnauty (headers and library expected under
 cargo bench --features c-nauty-bench
 ```
 
-A plain `cargo build` / `cargo test` has no C dependencies.
+A plain `cargo build` / `cargo test` has no C dependencies. Set
+`NAUTY_INCLUDE_DIR` and `NAUTY_LIB_DIR` for installations outside `/usr/local`.
+`cargo test --release --features c-nauty-bench --test c_reference` additionally
+compares 68,600 cases against C nauty, including digraphs, colors, group orders,
+orbits, and manager reuse across word boundaries.
+
+For local performance builds, `RUSTFLAGS="-C target-cpu=native"` enables the
+current CPU's instructions. Keep portable settings for binaries distributed to
+other CPUs. See `repro/optimization_review.md` for measured kernel improvements.
+
+The supported Rust API is `CanonautManager`, graph containers, graph6 I/O and
+public construction utilities. Search/refinement kernels, dispatch tables and
+algorithm contexts are internal. Optional stabilizer pruning is available through
+`CanonautManager::with_schreier()`. It uses nauty-style randomized expansion:
+undiscovered stabilizer elements reduce pruning, without changing correctness.
+It remains off by default because its overhead can outweigh the saved search.
+The implementation currently requires a 64-bit target.
 
 ## Python bindings
 
