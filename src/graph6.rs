@@ -17,6 +17,9 @@ pub enum Graph6Error {
     NotGraph6Format,
     InvalidByte(u8),
     UnexpectedEnd,
+    TrailingData,
+    InvalidPadding,
+    UnsupportedOrder,
 }
 
 impl std::fmt::Display for Graph6Error {
@@ -26,6 +29,9 @@ impl std::fmt::Display for Graph6Error {
             Self::NotGraph6Format => write!(f, "not graph6 (sparse6/digraph6 not supported)"),
             Self::InvalidByte(b) => write!(f, "invalid graph6 byte: {b}"),
             Self::UnexpectedEnd => write!(f, "unexpected end of data"),
+            Self::TrailingData => write!(f, "extra data after graph6 adjacency"),
+            Self::InvalidPadding => write!(f, "nonzero graph6 padding bits"),
+            Self::UnsupportedOrder => write!(f, "graph order exceeds the supported limit"),
         }
     }
 }
@@ -53,45 +59,48 @@ pub fn parse_graph6(input: &[u8]) -> Result<DenseGraph, Graph6Error> {
         _ => {}
     }
 
-    let mut byte_position = 0usize;
-
-    // Decode vertex_count
-    let vertex_count: usize = if input[byte_position] != 126 {
-        let header_byte = input[byte_position];
-        if header_byte < 63 {
-            return Err(Graph6Error::InvalidByte(header_byte));
-        }
-        byte_position += 1;
-        (header_byte - 63) as usize
-    } else if byte_position + 1 < input.len() && input[byte_position + 1] != 126 {
-        // 4-byte encoding: 126 + 3 data bytes
-        if byte_position + 4 > input.len() {
-            return Err(Graph6Error::UnexpectedEnd);
-        }
-        let decoded_count = ((input[byte_position + 1] as usize - 63) << 12)
-            | ((input[byte_position + 2] as usize - 63) << 6)
-            | (input[byte_position + 3] as usize - 63);
-        byte_position += 4;
-        decoded_count
+    let (size_start, size_end) = if input[0] != 126 {
+        (0, 1)
+    } else if input.get(1) == Some(&126) {
+        (2, 8)
     } else {
-        // 8-byte encoding: 126,126 + 6 data bytes
-        if byte_position + 8 > input.len() {
-            return Err(Graph6Error::UnexpectedEnd);
-        }
-        let decoded_count = ((input[byte_position + 2] as usize - 63) << 30)
-            | ((input[byte_position + 3] as usize - 63) << 24)
-            | ((input[byte_position + 4] as usize - 63) << 18)
-            | ((input[byte_position + 5] as usize - 63) << 12)
-            | ((input[byte_position + 6] as usize - 63) << 6)
-            | (input[byte_position + 7] as usize - 63);
-        byte_position += 8;
-        decoded_count
+        (1, 4)
     };
-
+    let size_bytes = input.get(size_start..size_end).ok_or(Graph6Error::UnexpectedEnd)?;
+    let mut vertex_count = 0usize;
+    for &byte in size_bytes {
+        if !(63..=126).contains(&byte) {
+            return Err(Graph6Error::InvalidByte(byte));
+        }
+        vertex_count = (vertex_count << 6) | (byte - 63) as usize;
+    }
+    if vertex_count > (crate::consts::ALGORITHM_INFINITY - 2) as usize {
+        return Err(Graph6Error::UnsupportedOrder);
+    }
+    let adjacency_bits = vertex_count.checked_mul(vertex_count.saturating_sub(1))
+        .ok_or(Graph6Error::UnsupportedOrder)? / 2;
+    let required_bytes = adjacency_bits.div_ceil(6);
+    let adjacency_data = &input[size_end..];
+    if adjacency_data.len() < required_bytes {
+        return Err(Graph6Error::UnexpectedEnd);
+    }
+    if adjacency_data.len() > required_bytes {
+        return Err(Graph6Error::TrailingData);
+    }
+    // Validate each byte once before allocating, rather than up to six times
+    // in the adjacency loop. Invalid/truncated input cannot trigger large allocations.
+    if let Some(&byte) = adjacency_data.iter().find(|&&byte| !(63..=126).contains(&byte)) {
+        return Err(Graph6Error::InvalidByte(byte));
+    }
+    let padding = (6 - adjacency_bits % 6) % 6;
+    if padding != 0 && (adjacency_data[required_bytes - 1] - 63) & ((1 << padding) - 1) != 0 {
+        return Err(Graph6Error::InvalidPadding);
+    }
     let words_per_vertex = words_needed(vertex_count) as u32;
-    let mut adjacency = vec![0usize; vertex_count * words_per_vertex as usize];
-
-    let adjacency_data = &input[byte_position..];
+    let graph_words = vertex_count.checked_mul(words_per_vertex as usize)
+        .filter(|&words| words <= isize::MAX as usize / size_of::<usize>())
+        .ok_or(Graph6Error::UnsupportedOrder)?;
+    let mut adjacency = vec![0usize; graph_words];
     let mut bit_index = 0usize;
 
     // Upper triangle: column from 1..vertex_count, row from 0..column
@@ -100,16 +109,9 @@ pub fn parse_graph6(input: &[u8]) -> Result<DenseGraph, Graph6Error> {
             let data_byte_index = bit_index / 6;
             let bit_offset_in_byte = 5 - (bit_index % 6); // MSB-first within each 6-bit group
 
-            if data_byte_index < adjacency_data.len() {
-                let raw_byte = adjacency_data[data_byte_index];
-                if !(63..=126).contains(&raw_byte) {
-                    return Err(Graph6Error::InvalidByte(raw_byte));
-                }
-                if ((raw_byte - 63) >> bit_offset_in_byte) & 1 == 1 {
-                    add_one_edge(&mut adjacency, row, column, words_per_vertex);
-                }
+            if ((adjacency_data[data_byte_index] - 63) >> bit_offset_in_byte) & 1 == 1 {
+                add_one_edge(&mut adjacency, row, column, words_per_vertex);
             }
-            // Bytes beyond adjacency_data.len() are implicitly zero (no edge)
 
             bit_index += 1;
         }
@@ -320,5 +322,52 @@ mod tests {
             parse_graph6(b"B\x20"),
             Err(Graph6Error::InvalidByte(0x20))
         );
+    }
+
+    #[test]
+    fn reject_truncated_or_extra_adjacency() {
+        for input in [b"A".as_slice(), b"D~", b"~??~"] {
+            assert_eq!(parse_graph6(input), Err(Graph6Error::UnexpectedEnd));
+        }
+        for input in [b"A?trailing".as_slice(), b"??", b"@?"] {
+            assert_eq!(parse_graph6(input), Err(Graph6Error::TrailingData));
+        }
+        assert_eq!(parse_graph6(b"A@"), Err(Graph6Error::InvalidPadding));
+    }
+
+    #[test]
+    fn reject_invalid_order_bytes_without_arithmetic_overflow() {
+        for byte in (0..=255u8).filter(|b| !(63..=126).contains(b)) {
+            if byte != b'\n' && byte != b'\r' && byte != b':' && byte != b'&' {
+                assert_eq!(parse_graph6(&[byte]), Err(Graph6Error::InvalidByte(byte)));
+            }
+            // A payload byte after the size keeps CR/LF size bytes from being
+            // stripped as line terminators.
+            for size in [vec![126, 63, 63, 126], vec![126, 126, 63, 63, 63, 63, 63, 126]] {
+                let start = if size.len() == 4 { 1 } else { 2 };
+                for i in start..size.len() {
+                    // A '~' second byte switches to the long encoding, but all
+                    // invalid bytes in this test are outside the '~' range.
+                    let mut input = size.clone();
+                    input[i] = byte;
+                    input.push(63);
+                    assert_eq!(parse_graph6(&input), Err(Graph6Error::InvalidByte(byte)));
+                }
+            }
+        }
+        assert_eq!(parse_graph6(b"~?? "), Err(Graph6Error::InvalidByte(32)));
+        assert_eq!(parse_graph6(b"~~????? "), Err(Graph6Error::InvalidByte(32)));
+        assert_eq!(parse_graph6(b"~~~~~~~~"), Err(Graph6Error::UnsupportedOrder));
+    }
+
+    #[test]
+    fn valid_extended_order_and_zero_padding() {
+        let mut input = b"~??~".to_vec(); // n=63
+        input.resize(4 + (63usize * 62 / 2).div_ceil(6), b'?');
+        let graph = parse_graph6(&input).unwrap();
+        assert_eq!(graph.number_of_vertices(), 63);
+        assert!(graph.adjacency.iter().all(|&word| word == 0));
+        // A valid long order with no payload must fail before allocating.
+        assert_eq!(parse_graph6(b"~~???~??"), Err(Graph6Error::UnexpectedEnd));
     }
 }
