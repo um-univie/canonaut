@@ -24,6 +24,9 @@ def _graph_like(g):
         return None
     if not (hasattr(g, "edges") and hasattr(g, "nodes")):
         return None
+    is_multigraph = getattr(g, "is_multigraph", None)
+    if callable(is_multigraph) and is_multigraph():
+        raise TypeError("multigraphs are not supported; convert explicitly to a simple graph")
     is_directed = getattr(g, "is_directed", None)
     directed = is_directed() if callable(is_directed) else None
     return list(g.edges()), list(g.nodes()), directed
@@ -177,6 +180,8 @@ def canonize(edges, *, nodes=None, colors=None, directed=False, generators=False
     edges : iterable of (node, node) pairs, or a graph-like object
         Edge list, or any object exposing ``.edges()``/``.nodes()`` (e.g. a
         ``networkx.Graph``/``DiGraph``). Nodes can be any hashable value.
+        Multigraph objects are rejected; convert them explicitly to simple
+        graphs if edge multiplicities should be discarded.
     nodes : iterable, optional
         All nodes, in the order you want them considered — only needed to
         include isolated vertices with no edges, or to fix ordering.
@@ -241,6 +246,7 @@ def are_isomorphic(edges1, edges2, *, nodes1=None, nodes2=None, directed=False):
     Parameters
     ----------
     edges1, edges2 : iterable of (node, node) pairs, or graph-like objects
+        Multigraph objects are rejected.
     nodes1, nodes2 : iterable, optional
         Full node sets — only needed for isolated vertices, or explicit order.
     directed : bool, optional

@@ -71,6 +71,11 @@ canonaut.canonize(edges, directed=True)
 Detected automatically for graph-like objects exposing `.is_directed()` (e.g.
 `networkx.DiGraph`).
 
+`networkx.MultiGraph` and `MultiDiGraph` are rejected because parallel edges
+cannot be represented. Convert explicitly to `nx.Graph` or `nx.DiGraph` if
+discarding edge multiplicities is intended. Duplicate pairs in a simple-graph
+edge list still denote a single edge.
+
 ### Fixed vertex colors and canonical keys
 
 Color values are fixed labels: an isomorphism must map each color to the same

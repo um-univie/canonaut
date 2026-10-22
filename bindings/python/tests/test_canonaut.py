@@ -96,6 +96,19 @@ class TestCanonize(unittest.TestCase):
 
 
 class TestCorrectnessRegressions(unittest.TestCase):
+    def test_multigraph_objects_are_rejected_before_losing_multiplicity(self):
+        nx = _import_networkx_or_skip(self)
+        for cls in [nx.MultiGraph, nx.MultiDiGraph]:
+            a, b = cls(), cls()
+            a.add_edges_from([(0, 1), (0, 1)])
+            b.add_edge(0, 1)
+            for graph in [a, b, cls()]:
+                with self.assertRaisesRegex(TypeError, "multigraphs are not supported"):
+                    canonaut.canonize(graph)
+            for left, right in [(a, b), (b, a), (nx.Graph(), a)]:
+                with self.assertRaisesRegex(TypeError, "multigraphs are not supported"):
+                    canonaut.are_isomorphic(left, right)
+
     def test_directed_path_has_no_nontrivial_automorphism(self):
         r = canonaut.raw.canonize(4, [(0, 2), (1, 0)], directed=True)
         self.assertEqual(r.group_size1, 1.0)
