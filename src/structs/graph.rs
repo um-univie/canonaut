@@ -11,6 +11,89 @@
 use crate::structs::BitSetOpsMSB0;
 use crate::utilities::words_needed;
 
+/// An immutable adjacency slice with validated dimensions and zero padding.
+///
+/// Validate once when importing a raw graph, then reuse this view with
+/// [`CanonautManager::canonize_validated`](crate::structs::CanonautManager::canonize_validated)
+/// to avoid repeating the input scan. This allocates nothing. The borrow prevents
+/// mutation of the underlying adjacency while the view is in use.
+/// Directedness is configured on the manager, just as for raw adjacency. This
+/// validates storage, not symmetry or the absence of loops: undirected input
+/// must be symmetric and loopless; otherwise enable the manager's digraph mode.
+///
+/// ```
+/// use canonaut::structs::{CanonautManager, ValidatedGraph};
+/// let adjacency = canonaut::generators::generate_cycle_graph(65);
+/// let graph = ValidatedGraph::new(&adjacency);
+/// let mut manager = CanonautManager::new(65).with_canonization();
+/// manager.canonize_validated(&graph);
+/// ```
+///
+/// ```compile_fail
+/// use canonaut::structs::{CanonautManager, ValidatedGraph};
+/// let mut adjacency = vec![0usize; 2];
+/// let graph = ValidatedGraph::new(&adjacency);
+/// adjacency[0] = 1; // cannot invalidate a live view
+/// CanonautManager::new(2).canonize_validated(&graph);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct ValidatedGraph<'a> {
+    pub(crate) adjacency: &'a [usize],
+    pub(crate) number_of_vertices: usize,
+    pub(crate) words_per_vertex: usize,
+}
+
+impl<'a> ValidatedGraph<'a> {
+    /// Borrows a flat MSB-0 adjacency matrix without copying it.
+    ///
+    /// # Panics
+    /// Panics if the length is not `n * ceil(n / 64)` for a supported order,
+    /// or if a padding bit outside `0..n` is set.
+    #[inline]
+    pub fn new(adjacency: &'a [usize]) -> Self {
+        let len = adjacency.len();
+        if len <= 64 {
+            // Single-word rows have n == len, including the empty graph.
+            // Avoid square-root inference and division on this common path.
+            return Self::with_order(adjacency, len);
+        }
+        Self::infer_order(adjacency)
+    }
+
+    // Keep general dimension inference out of the single-word fast path.
+    #[inline(never)]
+    fn infer_order(adjacency: &'a [usize]) -> Self {
+        let len = adjacency.len();
+        // n*m is strictly increasing, with m = ceil(n/64).
+        let words = ((len - 1) / 64).isqrt() + 1;
+        let vertices = len / words;
+        assert!(len % words == 0 && words_needed(vertices) == words,
+            "graph slice length does not correspond to a valid (n, m) pair");
+        Self::with_order(adjacency, vertices)
+    }
+
+    pub(crate) fn with_order(adjacency: &'a [usize], vertices: usize) -> Self {
+        assert!(vertices <= (crate::consts::ALGORITHM_INFINITY - 2) as usize,
+            "graph order exceeds the supported limit");
+        let words = words_needed(vertices);
+        assert_eq!(adjacency.len(), vertices * words,
+            "graph slice length does not match the vertex count");
+        let used = vertices % 64;
+        if used != 0 {
+            // Reduce first, then test once: the single-word case vectorizes.
+            // Multiword graphs only need the last word of each adjacency row.
+            let last_words = if words == 1 {
+                adjacency.iter().fold(0, |bits, &word| bits | word)
+            } else {
+                adjacency.chunks_exact(words).fold(0, |bits, row| bits | row[words - 1])
+            };
+            assert_eq!(last_words & (usize::MAX >> used), 0,
+                "graph padding bits must be zero");
+        }
+        Self { adjacency, number_of_vertices: vertices, words_per_vertex: words }
+    }
+}
+
 /// Sparse graph in CSR (compressed-sparse-row) style.
 ///
 /// Suitable for large, low-density graphs where the dense bit-matrix would

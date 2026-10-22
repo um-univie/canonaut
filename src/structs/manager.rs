@@ -10,7 +10,7 @@ use crate::refine::DISPATCH_GRAPH;
 use crate::refine::GraphContext;
 use crate::search::canonicalize;
 use crate::structs::{
-    graph::DenseGraph,
+    graph::{DenseGraph, ValidatedGraph},
     schreier_arena::SchreierSims,
     target_cell::TargetCellNodePool,
 };
@@ -653,39 +653,33 @@ impl CanonautManager {
     ///
     /// # Panics
     ///
-    /// Panics if `graph.len()` does not correspond to any valid `(n, m)` pair.
+    /// Panics if the dimensions are invalid or unsupported, or padding is nonzero.
+    /// For repeated calls on the same adjacency, use [`ValidatedGraph`] and
+    /// [`canonize_validated`](Self::canonize_validated) to validate only once.
     pub fn canonize(&mut self, graph: &[usize]) {
-        let (number_of_vertices, words_per_vertex) = Self::dimensions(graph.len());
-        self.run(graph, number_of_vertices, words_per_vertex, None);
+        self.canonize_validated(&ValidatedGraph::new(graph));
     }
 
-    // n*m is strictly increasing in n, with m = ceil(n / WORDSIZE).
-    // For nonempty input, m = floor(sqrt((len - 1) / WORDSIZE)) + 1.
-    fn dimensions(graph_words: usize) -> (usize, usize) {
-        if graph_words == 0 {
-            return (0, 0);
-        }
-        let words = ((graph_words - 1) / usize::BITS as usize).isqrt() + 1;
-        let vertices = graph_words / words;
-        assert!(
-            graph_words % words == 0 && words_needed(vertices) == words,
-            "graph slice length does not correspond to a valid (n, m) pair"
-        );
-        (vertices, words)
+    /// Like [`canonize`](Self::canonize), using a previously validated immutable
+    /// adjacency view. No input scan or dimension inference is repeated.
+    pub fn canonize_validated(&mut self, graph: &ValidatedGraph<'_>) {
+        self.run(graph, None);
+    }
+
+    /// Like [`canonize_with_colors`](Self::canonize_with_colors), without
+    /// revalidating the adjacency. `colors.len()` must equal the graph order.
+    pub fn canonize_validated_with_colors(&mut self, graph: &ValidatedGraph<'_>, colors: &[u32]) {
+        self.run(graph, Some(colors));
     }
 
     fn run(
         &mut self,
-        graph: &[usize],
-        number_of_vertices: usize,
-        words_per_vertex: usize,
+        graph: &ValidatedGraph<'_>,
         colors: Option<&[u32]>,
     ) {
-        assert_eq!(
-            graph.len(),
-            number_of_vertices * words_per_vertex,
-            "graph slice length does not match the vertex count"
-        );
+        // Dimensions and padding were checked at the public input boundary.
+        let number_of_vertices = graph.number_of_vertices;
+        let words_per_vertex = graph.words_per_vertex;
         self.prepare_for_run(number_of_vertices, words_per_vertex);
         self.options.default_partition = colors.is_none();
         if let Some(colors) = colors {
@@ -719,7 +713,7 @@ impl CanonautManager {
         // Pass an empty workspace slice — algorithm_context.workspace is pre-sized by
         // ensure_capacity (called inside canonicalize) and reused across calls.
         canonicalize(
-            graph,
+            graph.adjacency,
             &mut self.labeling,
             &mut self.partition,
             active,
@@ -742,13 +736,11 @@ impl CanonautManager {
     /// to calling [`canonize_with_colors`](Self::canonize_with_colors)); otherwise
     /// this is a plain uncolored [`canonize`](Self::canonize).
     pub fn canonize_graph(&mut self, graph: &DenseGraph) {
+        let validated = ValidatedGraph::with_order(&graph.adjacency, graph.number_of_vertices());
+        assert_eq!(graph.words_per_vertex as usize, validated.words_per_vertex,
+            "DenseGraph row stride does not match the vertex count");
         self.options.digraph = graph.is_directed() || graph.has_loops();
-        self.run(
-            &graph.adjacency,
-            graph.number_of_vertices(),
-            words_needed(graph.number_of_vertices()),
-            graph.colors(),
-        );
+        self.run(&validated, graph.colors());
     }
 
     /// Like [`canonize_graph`](Self::canonize_graph), but with `colors` passed
@@ -757,13 +749,11 @@ impl CanonautManager {
     /// the same graph under several different colorings; see
     /// [`canonize_with_colors`](Self::canonize_with_colors).
     pub fn canonize_graph_with_colors(&mut self, graph: &DenseGraph, colors: &[u32]) {
+        let validated = ValidatedGraph::with_order(&graph.adjacency, graph.number_of_vertices());
+        assert_eq!(graph.words_per_vertex as usize, validated.words_per_vertex,
+            "DenseGraph row stride does not match the vertex count");
         self.options.digraph = graph.is_directed() || graph.has_loops();
-        self.run(
-            &graph.adjacency,
-            graph.number_of_vertices(),
-            words_needed(graph.number_of_vertices()),
-            Some(colors),
-        );
+        self.run(&validated, Some(colors));
     }
 
     /// Like [`canonize`](Self::canonize), but with a vertex coloring (partition).
@@ -779,15 +769,14 @@ impl CanonautManager {
     /// # Panics
     ///
     /// Panics if `graph.len()` does not correspond to a valid `(n, m)` pair, or if
-    /// `colors.len()` does not equal `n`.
+    /// `colors.len()` does not equal `n`, padding is nonzero, or the order is unsupported.
     pub fn canonize_with_colors(&mut self, graph: &[usize], colors: &[u32]) {
-        let number_of_vertices = colors.len();
-        let words_per_vertex = words_needed(number_of_vertices);
         assert_eq!(
             graph.len(),
-            number_of_vertices * words_per_vertex,
+            colors.len() * words_needed(colors.len()),
             "colors.len() must equal the vertex count implied by graph.len()"
         );
-        self.run(graph, number_of_vertices, words_per_vertex, Some(colors));
+        let validated = ValidatedGraph::with_order(graph, colors.len());
+        self.canonize_validated_with_colors(&validated, colors);
     }
 }

@@ -7,7 +7,7 @@ use canonaut::{
         generate_random_graph, generate_star_graph,
     },
     graph6::parse_graph6_file,
-    structs::CanonautManager,
+    structs::{CanonautManager, ValidatedGraph},
     utilities::words_needed,
 };
 
@@ -60,6 +60,25 @@ fn run_c_nauty(graph: &[usize], c_nauty_buffers: &mut CNautyBuffers, words_per_v
 const SIZES_HARD: &[usize] = &[8, 16, 32, 64, 128];
 /// Sizes for tractable graphs (cycle, path, random).
 const SIZES_EASY: &[usize] = &[8, 16, 32, 64, 128, 256];
+
+/// Keep validation-inclusive timings distinct from validation-once timings.
+/// Existing canonaut-vs-C groups continue to use the checked raw-slice API.
+fn bench_input_validation(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("input_validation");
+    for vertex_count in [8, 36, 63, 64, 65, 129, 512] {
+        let graph = generate_random_graph(vertex_count, 0.1, 42);
+        let validated = ValidatedGraph::new(&graph);
+        group.bench_function(BenchmarkId::new("checked", vertex_count), |bencher| {
+            let mut manager = CanonautManager::new(vertex_count).with_canonization();
+            bencher.iter(|| manager.canonize(black_box(&graph)));
+        });
+        group.bench_function(BenchmarkId::new("validated", vertex_count), |bencher| {
+            let mut manager = CanonautManager::new(vertex_count).with_canonization();
+            bencher.iter(|| manager.canonize_validated(black_box(&validated)));
+        });
+    }
+    group.finish();
+}
 
 fn bench_complete(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("complete");
@@ -308,5 +327,6 @@ criterion_group!(
     bench_g6_batch,
     bench_scaling,
     bench_hard,
+    bench_input_validation,
 );
 criterion_main!(benches);

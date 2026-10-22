@@ -192,12 +192,33 @@ let canon = manager.take_canonical_graph();
 println!("{:?}", canon);
 ```
 
+Raw adjacency is checked for valid dimensions and zero padding before search.
+For repeated canonicalizations of the same graph, borrow a `ValidatedGraph`
+once to avoid repeating validation or inferring dimensions on each call:
+
+```rust
+use canonaut::structs::{CanonautManager, ValidatedGraph};
+
+let adjacency = canonaut::generators::generate_cycle_graph(65);
+let graph = ValidatedGraph::new(&adjacency); // no copy or allocation
+let mut manager = CanonautManager::new(65).with_canonization();
+manager.canonize_validated(&graph);
+let colors: Vec<u32> = (0..65).map(|v| v % 3).collect();
+manager.canonize_validated_with_colors(&graph, &colors);
+```
+
+The view holds an immutable borrow, so its adjacency cannot change while it is
+in use. Configure directedness on the manager with `with_digraph()`, as with
+raw slices; this is also required for graphs with loops. Coloring is supplied
+per call. Search kernels do not perform additional validation.
+
 ## Key types
 
 | Type | Location | Purpose |
 |------|----------|---------|
 | `CanonautManager` | `canonaut::structs` | High-level manager; owns all buffers |
 | `DenseGraph` | `canonaut::structs` | Dense graph container (adjacency + directedness + coloring) |
+| `ValidatedGraph` | `canonaut::structs` | Immutable raw adjacency view; validates once for repeated searches |
 | `Statistics` | `canonaut::structs` | Output: group size, orbit count, search tree stats |
 | `add_one_edge` | `canonaut::structs` | Add undirected edge to a raw flat adjacency bitmatrix |
 | `add_one_arc` | `canonaut::structs` | Add directed edge (arc) to a raw flat adjacency bitmatrix |

@@ -1,5 +1,5 @@
 //! Count requests on the test thread, excluding unrelated test-runner traffic.
-use canonaut::{generators::generate_random_graph, structs::CanonautManager};
+use canonaut::{generators::generate_random_graph, structs::{CanonautManager, ValidatedGraph}};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -43,11 +43,15 @@ fn warmed_colored_and_uncolored_size_changes_do_not_allocate() {
     let mut manager = CanonautManager::new(193).with_canonization();
     manager.canonize(&graph);
     manager.canonize_with_colors(&small, &colors);
+    let validated = ValidatedGraph::new(&graph);
+    let validated_small = ValidatedGraph::new(&small);
     REQUESTS.with(|n| n.set(0));
     TRACK.with(|track| track.set(true));
     for _ in 0..20 {
         manager.canonize(&graph);
         manager.canonize_with_colors(&small, &colors);
+        manager.canonize_validated(&validated);
+        manager.canonize_validated_with_colors(&validated_small, &colors);
     }
     TRACK.with(|track| track.set(false));
     assert_eq!(REQUESTS.with(Cell::get), 0);
