@@ -55,7 +55,7 @@ pub(crate) struct AlgorithmContext {
     pub user_node_procedure:
         Option<fn(&[usize], &mut [u32], &mut [u32], u32, u32, i32, u32, u32, u32) -> ()>,
     /// Called whenever a new automorphism generator is found.
-    pub user_automorphism_procedure: Option<fn(u32, &mut [u32], &mut [u32], u32, u32, u32) -> ()>,
+    pub user_automorphism_procedure: Option<fn(u32, &[u32], &[u32], u32, u32, u32) -> ()>,
     /// Called when the search descends to a new level.
     pub user_level_procedure: Option<
         fn(
@@ -408,7 +408,7 @@ pub(crate) struct CanonautOptions {
             &mut GraphContext,
         ) -> (),
     >,
-    pub user_automorphism_procedure: Option<fn(u32, &mut [u32], &mut [u32], u32, u32, u32) -> ()>,
+    pub user_automorphism_procedure: Option<fn(u32, &[u32], &[u32], u32, u32, u32) -> ()>,
     pub user_level_procedure: Option<
         fn(
             &mut [u32],
@@ -565,12 +565,12 @@ impl CanonautManager {
 
     /// Registers a callback invoked for every automorphism generator found.
     ///
-    /// The callback signature mirrors nauty's `userautomproc`:
+    /// The arguments follow nauty's `userautomproc`:
     /// `(generator_number, perm, orbits, num_orbits, stabvert, n)`.
-    /// The callback observes search state; it must not modify `perm` or `orbits`.
+    /// The callback borrows read-only search state; both slices have length `n`.
     pub fn with_automorphism_callback(
         mut self,
-        callback: fn(u32, &mut [u32], &mut [u32], u32, u32, u32),
+        callback: fn(u32, &[u32], &[u32], u32, u32, u32),
     ) -> Self {
         self.options.user_automorphism_procedure = Some(callback);
         self

@@ -18,8 +18,8 @@ thread_local! {
 
 fn capture_generator(
     _gen_num: u32,
-    perm: &mut [u32],
-    _orbits: &mut [u32],
+    perm: &[u32],
+    _orbits: &[u32],
     _num_orbits: u32,
     _orbit_rep: u32,
     n: u32,

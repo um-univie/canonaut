@@ -154,11 +154,11 @@ println!("|Aut| = {}", manager.statistics().group_size1); // 4.0
 
 ### Automorphism generators
 
-Register a callback with the same signature as nauty's `userautomproc` to receive
-every generator permutation found:
+Register a read-only callback with nauty's `userautomproc` argument order to receive
+every generator permutation found. Both slices have length `n`:
 
 ```rust
-fn on_automorphism(n: u32, perm: &mut [u32], orbits: &mut [u32], num_orbits: u32, stabvert: u32, index: u32) {
+fn on_automorphism(generator_number: u32, perm: &[u32], orbits: &[u32], num_orbits: u32, stabvert: u32, n: u32) {
     println!("{:?}", perm);
 }
 

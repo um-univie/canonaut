@@ -1176,7 +1176,7 @@ fn processnode(
             if let Some(procedure) = context.user_automorphism_procedure {
                 procedure(
                     stats_ptr.number_of_generators,
-                    &mut context.work_permutation,
+                    &context.work_permutation[..context.number_of_vertices as usize],
                     orbits,
                     stats_ptr.number_of_orbits,
                     context.orbit_representative,
@@ -1229,7 +1229,7 @@ fn processnode(
             if let Some(procedure) = context.user_automorphism_procedure {
                 procedure(
                     stats_ptr.number_of_generators,
-                    &mut context.work_permutation,
+                    &context.work_permutation[..context.number_of_vertices as usize],
                     orbits,
                     stats_ptr.number_of_orbits,
                     context.orbit_representative,
