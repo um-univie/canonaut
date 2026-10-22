@@ -592,7 +592,7 @@ impl SchreierSims {
             // Preserve the compatible prefix and this level's orbits. Its
             // transversal and every deeper stabilizer depend on the new base.
             for level in &mut self.chain[depth..] {
-                for id in &mut level.transversal { *id = PermId::NONE; }
+                level.transversal.fill(PermId::NONE);
             }
             loop {
                 self.chain[depth].fixed_point = point as u32;
