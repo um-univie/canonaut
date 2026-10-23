@@ -6,7 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-09-17
+## [1.1.0] - 2026-10-23
+
+### Input validation
+
+- Reject nonzero adjacency padding before unchecked graph kernels. Add the
+  allocation-free `ValidatedGraph` view and `canonize_validated` /
+  `canonize_validated_with_colors` for validation once across repeated searches.
+- **Breaking:** automorphism callbacks now take `&[u32]` for permutations and
+  orbits, preventing safe callbacks from corrupting internal search state.
+  Both slices have the current graph order as their length, including after reuse.
+- Reject truncated/extra graph6 payloads, invalid order bytes, nonzero format
+  padding, and unsupported orders before adjacency allocation. Validate each
+  payload byte once outside the edge decoding loop. `Graph6Error` has new
+  variants; exhaustive matches must handle them.
+- Reject Python multigraph objects explicitly instead of silently dropping
+  parallel-edge multiplicities.
+- Add separate checked/validated input benchmarks; see
+  `repro/input_validation_review.md` for before/after and C-nauty measurements.
+- Reduce repeated manager setup checks using private buffer invariants and
+  add a single-word input fast path. Keep the existing refinement scan after
+  broader benchmarks rejected alternatives; see `repro/setup_optimization.md`.
 
 ### Correctness and performance
 
