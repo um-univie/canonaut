@@ -222,6 +222,28 @@ fn dense_undirected_loops_use_full_automorphism_checks() {
 }
 
 #[test]
+fn prepared_buffers_and_public_output_mutation_preserve_reuse() {
+    use canonaut::generators::generate_cycle_graph;
+    let mut reused = CanonautManager::new(8).with_canonization();
+    for n in [8usize, 64, 3, 65, 0, 8] {
+        let graph = generate_cycle_graph(n);
+        let mut fresh = CanonautManager::new(n).with_canonization();
+        fresh.canonize(&graph);
+        // Public preparation can change the private buffers' logical lengths.
+        reused.prepare_for_run(n + 1, (n + 1).div_ceil(64));
+        for output_size in [0, 1, graph.len() + 1] {
+            reused.canonical_graph.resize(output_size, usize::MAX);
+            reused.canonize(&graph);
+            assert_eq!(reused.canonical_graph, fresh.canonical_graph);
+            assert_eq!(reused.labeling(), fresh.labeling());
+            assert_eq!(reused.orbits(), fresh.orbits());
+            let taken = reused.take_canonical_graph();
+            assert_eq!(taken, fresh.canonical_graph);
+        }
+    }
+}
+
+#[test]
 #[should_panic(expected = "vertex out of range")]
 fn dense_graph_rejects_arcs_into_padding_bits() {
     canonaut::structs::DenseGraph::new_directed(3).add_arc(0, 3);

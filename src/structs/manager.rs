@@ -199,6 +199,19 @@ impl AlgorithmContext {
     pub fn ensure_capacity(&mut self, words_per_vertex: u32, number_of_vertices: u32) {
         let word_count = words_per_vertex as usize;
         let vertex_count = number_of_vertices as usize;
+        // All vertex-sized buffers grow together here; first_path_codes also
+        // includes the required two slack entries. The active set alone can
+        // shrink, and must retain the current graph's exact word count.
+        if self.first_path_codes.len() >= vertex_count + 2 && self.active.len() == word_count {
+            debug_assert!(self.work_permutation.len() >= vertex_count);
+            debug_assert!(self.first_labeling.len() >= vertex_count);
+            debug_assert!(self.canonical_labeling.len() >= vertex_count);
+            debug_assert!(self.canonical_path_codes.len() >= vertex_count + 2);
+            debug_assert!(self.first_target_cell.len() >= vertex_count + 2);
+            debug_assert!(self.fixed_points.len() >= word_count);
+            debug_assert!(self.workspace.len() >= 2 * 500 * word_count);
+            return;
+        }
         if self.work_permutation.len() < vertex_count {
             self.work_permutation.resize(vertex_count, 0);
         }
@@ -587,9 +600,13 @@ impl CanonautManager {
         // Logical lengths follow the current graph; allocated capacities are retained.
         let graph_words = number_of_vertices * words_per_vertex;
         Self::ensure_len(&mut self.canonical_graph, graph_words);
-        Self::ensure_len(&mut self.labeling, number_of_vertices);
-        Self::ensure_len(&mut self.partition, number_of_vertices);
-        Self::ensure_len(&mut self.orbits, number_of_vertices);
+        // These private buffers always have the same logical length. Only the
+        // public canonical_graph can be independently resized or taken out.
+        if self.labeling.len() != number_of_vertices {
+            Self::ensure_len(&mut self.labeling, number_of_vertices);
+            Self::ensure_len(&mut self.partition, number_of_vertices);
+            Self::ensure_len(&mut self.orbits, number_of_vertices);
+        }
     }
 
     #[inline]
