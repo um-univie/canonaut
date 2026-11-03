@@ -306,7 +306,8 @@ algorithm contexts are internal. Optional stabilizer pruning is available throug
 `CanonautManager::with_schreier()`. It uses nauty-style randomized expansion:
 undiscovered stabilizer elements reduce pruning, without changing correctness.
 It remains off by default because its overhead can outweigh the saved search.
-The implementation currently requires a 64-bit target.
+Bitsets use the target's word size, so 32-bit targets such as wasm32 work too,
+with the same canonical labelings as 64-bit ones.
 
 ## Python bindings
 

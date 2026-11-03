@@ -62,6 +62,3 @@ pub mod utilities;
 mod test_vectors;
 #[cfg(test)]
 mod tests;
-
-#[cfg(not(target_pointer_width = "64"))]
-compile_error!("canonaut currently requires a 64-bit target");

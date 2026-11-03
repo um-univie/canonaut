@@ -9,6 +9,7 @@
 //! [`CanonautManager::canonize_graph`](crate::structs::CanonautManager::canonize_graph).
 
 use crate::structs::BitSetOpsMSB0;
+use crate::bit_ops::{W, WMASK};
 use crate::utilities::words_needed;
 
 /// An immutable adjacency slice with validated dimensions and zero padding.
@@ -47,12 +48,12 @@ impl<'a> ValidatedGraph<'a> {
     /// Borrows a flat MSB-0 adjacency matrix without copying it.
     ///
     /// # Panics
-    /// Panics if the length is not `n * ceil(n / 64)` for a supported order,
+    /// Panics if the length is not `n * ceil(n / usize::BITS)` for a supported order,
     /// or if a padding bit outside `0..n` is set.
     #[inline]
     pub fn new(adjacency: &'a [usize]) -> Self {
         let len = adjacency.len();
-        if len <= 64 {
+        if len <= W {
             // Single-word rows have n == len, including the empty graph.
             // Avoid square-root inference and division on this common path.
             return Self::with_order(adjacency, len);
@@ -64,8 +65,8 @@ impl<'a> ValidatedGraph<'a> {
     #[inline(never)]
     fn infer_order(adjacency: &'a [usize]) -> Self {
         let len = adjacency.len();
-        // n*m is strictly increasing, with m = ceil(n/64).
-        let words = ((len - 1) / 64).isqrt() + 1;
+        // n*m is strictly increasing, with m = ceil(n/W).
+        let words = ((len - 1) / W).isqrt() + 1;
         let vertices = len / words;
         assert!(len % words == 0 && words_needed(vertices) == words,
             "graph slice length does not correspond to a valid (n, m) pair");
@@ -78,7 +79,7 @@ impl<'a> ValidatedGraph<'a> {
         let words = words_needed(vertices);
         assert_eq!(adjacency.len(), vertices * words,
             "graph slice length does not match the vertex count");
-        let used = vertices % 64;
+        let used = vertices % W;
         if used != 0 {
             // Reduce first, then test once: the single-word case vectorizes.
             // Multiword graphs only need the last word of each adjacency row.
@@ -212,8 +213,8 @@ impl DenseGraph {
 
     pub(crate) fn has_loops(&self) -> bool {
         (0..self.number_of_vertices()).any(|v| {
-            self.adjacency[v * self.words_per_vertex as usize + v / 64]
-                & (1usize << (63 - v % 64)) != 0
+            self.adjacency[v * self.words_per_vertex as usize + v / W]
+                & (1usize << (WMASK - v % W)) != 0
         })
     }
 

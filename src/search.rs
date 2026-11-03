@@ -36,19 +36,19 @@ pub fn multiply(number1: &mut f64, number2: &mut u32, factor: u32) {
 /// assert!(result.is_some());
 /// ```
 pub fn validate_input(words_per_vertex: u32, num_vertices: u32) -> Option<String> {
-    if words_per_vertex > ALGORITHM_INFINITY / 64 + 1 {
+    if words_per_vertex > ALGORITHM_INFINITY / usize::BITS + 1 {
         return Some(format!(
             "canonaut: need words_per_vertex <= {}, but words_per_vertex={}",
-            ALGORITHM_INFINITY / 64 + 1,
+            ALGORITHM_INFINITY / usize::BITS + 1,
             words_per_vertex
         ));
     }
 
-    if num_vertices > ALGORITHM_INFINITY - 2 || num_vertices > 64 * words_per_vertex {
+    if num_vertices > ALGORITHM_INFINITY - 2 || num_vertices > usize::BITS * words_per_vertex {
         return Some(format!(
             "canonaut: need num_vertices <= min({},{}*words_per_vertex), but num_vertices={}",
             ALGORITHM_INFINITY - 2,
-            64,
+            usize::BITS,
             num_vertices
         ));
     }
@@ -152,7 +152,7 @@ pub fn canonicalize(
     }
 
     if let Some(error_msg) = validate_input(words_per_vertex, number_of_vertices) {
-        stats.error_status_code = if words_per_vertex > ALGORITHM_INFINITY / 64 + 1 {
+        stats.error_status_code = if words_per_vertex > ALGORITHM_INFINITY / usize::BITS + 1 {
             2
         } else {
             1
@@ -214,7 +214,7 @@ pub fn canonicalize(
     }
     options.algorithm_context.invariant_argument = options.invariant_argument;
 
-    check_build_consistency(64, 28090);
+    check_build_consistency(crate::bit_ops::WORDSIZE, 28090);
 
     // Ensure all internal buffers have sufficient capacity.  Buffers only grow
     // so they are safely reused across repeated calls (no allocation on the hot path).
@@ -1535,7 +1535,7 @@ mod entry_tests {
         let mut stats = Statistics::new();
         let mut orbits = [0; 4];
         canonicalize(&[0; 4], &mut [0, 1, 2, 3], &mut [1, 1, 1, 0],
-            Some(&[1usize << 63]), &mut orbits, &mut options, &mut stats,
+            Some(&[1usize << (usize::BITS - 1)]), &mut orbits, &mut options, &mut stats,
             &mut [], 1, 4, None, &mut GraphContext::new(4));
         assert_eq!(stats.group_size1, 24.0);
         assert_eq!(orbits, [0; 4]);

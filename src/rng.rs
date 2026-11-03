@@ -2,20 +2,20 @@
 /// static mutables so multiple generators can run independently.
 #[derive(Debug, Clone)]
 pub struct RngState {
-    kissx: usize,
-    kissc: usize,
-    kissy: usize,
-    kissz: usize,
-    kisst: usize,
+    kissx: u64,
+    kissc: u64,
+    kissy: u64,
+    kissz: u64,
+    kisst: u64,
 }
 
 impl RngState {
     pub fn new() -> Self {
         Self {
-            kissx: 1234567890987654321_usize,
-            kissc: 123456123456123456_usize,
-            kissy: 362436362436362436_usize,
-            kissz: 1066149217761810_usize,
+            kissx: 1234567890987654321_u64,
+            kissc: 123456123456123456_u64,
+            kissy: 362436362436362436_u64,
+            kissz: 1066149217761810_u64,
             kisst: 0,
         }
     }
@@ -25,10 +25,10 @@ impl RngState {
     }
 
     pub fn init_with_two_seeds(&mut self, seed1: usize, seed2: usize) {
-        self.kissx = 1234567890987654321_usize.wrapping_add(seed1);
-        self.kissy = 362436362436362436_usize.wrapping_add(seed2.wrapping_mul(997));
-        self.kissc = 123456123456123456_usize;
-        self.kissz = 1066149217761810_usize;
+        self.kissx = 1234567890987654321_u64.wrapping_add(seed1 as u64);
+        self.kissy = 362436362436362436_u64.wrapping_add((seed2 as u64).wrapping_mul(997));
+        self.kissc = 123456123456123456_u64;
+        self.kissz = 1066149217761810_u64;
 
         // Warm up the generator
         for _ in 0..1000 {
@@ -59,15 +59,15 @@ impl RngState {
         self.kisst = (self.kissx << 58).wrapping_add(self.kissc);
         self.kissc = self.kissx >> 6;
         self.kissx = self.kissx.wrapping_add(self.kisst);
-        self.kissc = self.kissc.wrapping_add((self.kissx < self.kisst) as usize);
+        self.kissc = self.kissc.wrapping_add((self.kissx < self.kisst) as u64);
         self.kissy ^= self.kissy << 13;
         self.kissy ^= self.kissy >> 17;
         self.kissy ^= self.kissy << 43;
-        self.kissz = 6906969069_usize
+        self.kissz = 6906969069_u64
             .wrapping_mul(self.kissz)
             .wrapping_add(1234567);
 
-        self.kissx.wrapping_add(self.kissy).wrapping_add(self.kissz)
+        self.kissx.wrapping_add(self.kissy).wrapping_add(self.kissz) as usize
     }
 }
 

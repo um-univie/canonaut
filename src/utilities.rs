@@ -79,11 +79,11 @@ pub fn next_element(bitset: &[usize], words_per_vertex: u32, position: i32) -> O
         if position < 0 {
             remaining_word = bitset[0];
         } else {
-            if position >= 63 {
+            if position as usize >= WORD_SIZE - 1 {
                 // Changed from 64 to 63 to prevent overflow
                 return None;
             }
-            remaining_word = bitset[0] & (0x7fffffffffffffff_usize >> position);
+            remaining_word = bitset[0] & ((usize::MAX >> 1) >> position);
         }
 
         if remaining_word == 0 {
@@ -98,19 +98,19 @@ pub fn next_element(bitset: &[usize], words_per_vertex: u32, position: i32) -> O
         word_index = 0;
         remaining_word = bitset[0];
     } else {
-        word_index = position >> 6; // position / 64
+        word_index = position >> WORD_SHIFT; // position / word size
         if word_index >= words_per_vertex as i32 {
             return None;
         }
-        remaining_word = bitset[word_index as usize] & (0x7fffffffffffffff_usize >> (position & 0x3f));
+        remaining_word = bitset[word_index as usize] & ((usize::MAX >> 1) >> (position as usize & (WORD_SIZE - 1)));
     }
 
     loop {
         if remaining_word != 0 {
             let bit_position = remaining_word.leading_zeros() as i32;
-            let absolute_position = (word_index << 6) + bit_position;
+            let absolute_position = (word_index << WORD_SHIFT) + bit_position;
             // Ensure we don't return a position beyond the valid range
-            if absolute_position >= (words_per_vertex << 6) as i32 {
+            if absolute_position >= (words_per_vertex << WORD_SHIFT) as i32 {
                 return None;
             }
             return Some(absolute_position);

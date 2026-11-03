@@ -10,6 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Input validation
 
+- Support 32-bit targets such as wasm32: word size, bit and word indices come
+  from `usize::BITS`, and the random generator keeps 64-bit state, so labelings
+  match across targets (#1, by S. Joshua Swamidass).
 - Reject nonzero adjacency padding before unchecked graph kernels. Add the
   allocation-free `ValidatedGraph` view and `canonize_validated` /
   `canonize_validated_with_colors` for validation once across repeated searches.
@@ -43,7 +46,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   values (including tuples/frozensets), rather than arbitrary custom objects.
 - **Breaking:** search/refinement kernels, algorithm options/contexts and
   Schreier machinery are private. Use `CanonautManager` and its
-  builders; raw adjacency remains supported. Require a 64-bit target explicitly.
+  builders; raw adjacency remains supported.
 - Remove colored-call sorting allocations, redundant dimension inference and
   setup, and quadratic Python result-list copying. Size canonical output
   correctly at construction.

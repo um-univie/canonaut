@@ -4,7 +4,7 @@
 //! group discovered during a canonicalization search.  [`SchreierArenaContext`] holds the
 //! reusable scratch buffers shared by all operations on a single chain.
 
-use crate::{rng::RngState, structs::BitSetOpsMSB0};
+use crate::{bit_ops::W, rng::RngState, structs::BitSetOpsMSB0};
 static DEFAULT_SCHREIERFAILS: u32 = 10;
 
 /// Reusable scratch buffers for Schreier–Sims operations.
@@ -42,8 +42,8 @@ impl SchreierArenaContext {
             working_permutation_a: vec![0; vertex_count],
             working_permutation_b: vec![0; vertex_count],
             // Size hint for bitsets: (vertex_count + 63) / 64
-            working_set: vec![0; vertex_count.div_ceil(64)],
-            working_set2: vec![0; vertex_count.div_ceil(64)],
+            working_set: vec![0; vertex_count.div_ceil(usize::BITS as usize)],
+            working_set2: vec![0; vertex_count.div_ceil(usize::BITS as usize)],
             maximum_schreier_failures: 10,
             filter_count: 0,
             mult_count: 0,
@@ -270,10 +270,11 @@ impl SchreierSims {
             }
         } else {
             // power >= 20: Cycle Decomposition
-            workset[..permutation_length.div_ceil(64)].fill(0);
+            const WB: usize = usize::BITS as usize;
+            workset[..permutation_length.div_ceil(WB)].fill(0);
             for vertex_index in 0..permutation_length {
-                let word_index = vertex_index / 64;
-                let bit_index = vertex_index % 64;
+                let word_index = vertex_index / WB;
+                let bit_index = vertex_index % WB;
                 if (workset[word_index] & (1 << bit_index)) != 0 { continue; }
                 if perm_at!(vertex_index as u32) == vertex_index as u32 {
                     unsafe { *workperm_b.get_unchecked_mut(vertex_index) = vertex_index as u32; }
@@ -284,7 +285,7 @@ impl SchreierSims {
                     while cycle_cursor != vertex_index {
                         unsafe { *workperm_a.get_unchecked_mut(cycle_length) = cycle_cursor as u32; }
                         cycle_length += 1;
-                        workset[cycle_cursor / 64] |= 1 << (cycle_cursor % 64);
+                        workset[cycle_cursor / WB] |= 1 << (cycle_cursor % WB);
                         cycle_cursor = perm_at!(cycle_cursor as u32) as usize;
                     }
                     let mut rotated_offset = (power as usize) % cycle_length;
@@ -316,8 +317,8 @@ impl SchreierSims {
         self.context.working_permutation2.resize(n, 0);
         self.context.working_permutation_a.resize(n, 0);
         self.context.working_permutation_b.resize(n, 0);
-        self.context.working_set.resize(n.div_ceil(64), 0);
-        self.context.working_set2.resize(n.div_ceil(64), 0);
+        self.context.working_set.resize(n.div_ceil(W), 0);
+        self.context.working_set2.resize(n.div_ceil(W), 0);
         self.context.maximum_schreier_failures = DEFAULT_SCHREIERFAILS;
         self.context.filter_count = 0;
         self.context.mult_count = 0;
@@ -580,7 +581,7 @@ impl SchreierSims {
     /// Random expansion can miss stabilizer elements, which only reduces pruning.
     pub fn prune_set(&mut self, fixed_points: &[usize], cell: &mut [usize]) {
         let n = self.number_of_vertices;
-        self.context.working_set.copy_from_slice(&fixed_points[..n.div_ceil(64)]);
+        self.context.working_set.copy_from_slice(&fixed_points[..n.div_ceil(W)]);
         let mut depth = 0;
         while self.chain[depth].fixed_point != u32::MAX {
             let point = self.chain[depth].fixed_point as usize;
@@ -669,7 +670,7 @@ mod tests {
                     let group = closure(&generators, n);
                     // Deliberately switch incompatible bases and shorten them.
                     for mask in (0..1usize << n).rev() {
-                        let mut fixed = vec![0usize; n.div_ceil(64)];
+                        let mut fixed = vec![0usize; n.div_ceil(W)];
                         let mut cell = fixed.clone();
                         for v in 0..n {
                             cell.set_bit(v);
