@@ -43,9 +43,10 @@ jobs:
             target: x64
     steps:
       - uses: actions/checkout@v5
+      # Only the build interpreter; abi3-py39 still targets CPython 3.9+.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.12"
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -75,7 +76,8 @@ jobs:
   smoke-test:
     name: test ${{ matrix.artifact }} on Python ${{ matrix.python }}
     needs: [wheels, sdist]
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 images have no Python 3.9.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python: ["3.9", "3.14"]

@@ -96,7 +96,8 @@ jobs:
 
   python:
     name: python bindings
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 images have no Python 3.9, the oldest version supported.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
